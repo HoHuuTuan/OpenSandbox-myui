@@ -84,7 +84,7 @@ def _get_skill_source() -> Path:
     pkg = importlib.resources.files("opensandbox_cli") / "skills" / "opensandbox-troubleshoot.md"
     # For older Python or zipped packages, we may need to extract
     if hasattr(pkg, "__fspath__"):
-        return Path(pkg)
+        return Path(str(pkg))
     # Fallback: try resolving as a traversable
     with importlib.resources.as_file(pkg) as p:
         return Path(p)
