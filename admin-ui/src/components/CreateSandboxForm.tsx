@@ -34,7 +34,7 @@ export function CreateSandboxForm({ busy, onCreate }: CreateSandboxFormProps) {
   const [cpu, setCpu] = useState("500m");
   const [memory, setMemory] = useState("512Mi");
   const [envText, setEnvText] = useState("PYTHONUNBUFFERED=1");
-  const [metadataText, setMetadataText] = useState("name=Sandbox Quản Trị");
+  const [metadataText, setMetadataText] = useState("name=Sandbox-quan-tri");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { EmptyState } from "../components/EmptyState";
@@ -6,9 +7,12 @@ import { PageHeader } from "../components/PageHeader";
 import { TerminalPane } from "../components/TerminalPane";
 import { useSandboxDiagnostics } from "./hooks";
 
+type TabKey = "summary" | "logs" | "inspect" | "events";
+
 export function TerminalPage() {
   const { sandboxId = "" } = useParams();
   const { diagnostics, loading, error, refresh } = useSandboxDiagnostics(sandboxId);
+  const [activeTab, setActiveTab] = useState<TabKey>("summary");
 
   if (loading) {
     return <LoadingBlock label="Đang tải chẩn đoán..." />;
@@ -17,6 +21,8 @@ export function TerminalPage() {
   if (error || !diagnostics) {
     return <EmptyState title="Không tải được chẩn đoán" body={error || "Không có đầu ra."} />;
   }
+
+  const tabContent = diagnostics[activeTab];
 
   return (
     <div className="grid">
@@ -35,8 +41,24 @@ export function TerminalPage() {
         }
       />
 
-      <TerminalPane title="Tổng Hợp" content={diagnostics.summary} />
-      <TerminalPane title="Nhật Ký" content={diagnostics.logs} />
+      <div className="card">
+        <div className="page-actions">
+          <button className={activeTab === "summary" ? "button" : "ghost-button"} onClick={() => setActiveTab("summary")}>
+            Summary
+          </button>
+          <button className={activeTab === "logs" ? "button" : "ghost-button"} onClick={() => setActiveTab("logs")}>
+            Logs
+          </button>
+          <button className={activeTab === "inspect" ? "button" : "ghost-button"} onClick={() => setActiveTab("inspect")}>
+            Inspect
+          </button>
+          <button className={activeTab === "events" ? "button" : "ghost-button"} onClick={() => setActiveTab("events")}>
+            Events
+          </button>
+        </div>
+      </div>
+
+      <TerminalPane title={activeTab.toUpperCase()} content={tabContent} />
     </div>
   );
 }

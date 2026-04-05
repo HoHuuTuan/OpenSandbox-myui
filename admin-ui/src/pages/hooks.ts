@@ -3,20 +3,30 @@ import { useEffect, useState } from "react";
 import { useSettings } from "../context/settings";
 import {
   createSandbox,
+  createSandboxTag,
   deleteSandbox,
-  fetchDiagnostics,
+  deleteSandboxTag,
+  fetchDiagnosticsEvents,
+  fetchDiagnosticsInspect,
+  fetchDiagnosticsLogs,
+  fetchDiagnosticsSummary,
   fetchSandbox,
   fetchSandboxEndpoint,
+  fetchSandboxNote,
+  fetchSandboxTags,
   fetchSandboxes,
   pauseSandbox,
   renewSandboxExpiration,
   resumeSandbox,
+  saveSandboxNote,
 } from "../lib/api";
+
 import type {
   CreateSandboxRequest,
-  DiagnosticsBundle,
+  DiagnosticsSections,
   EndpointResponse,
   Sandbox,
+  SandboxTagItem,
 } from "../types";
 
 export function useSandboxCollection() {
@@ -24,7 +34,7 @@ export function useSandboxCollection() {
   const [sandboxes, setSandboxes] = useState<Sandbox[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [reloadToken, setReloadToken] = useState(0);
+  const [reloadToken, setReloadToken] = useState<number>(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,22 +72,22 @@ export function useSandboxCollection() {
     sandboxes,
     loading,
     error,
-    refresh: () => setReloadToken((value) => value + 1),
+    refresh: () => setReloadToken((value:number) => value + 1),
     create: async (request: CreateSandboxRequest) => {
       await createSandbox(settings, request);
-      setReloadToken((value) => value + 1);
+      setReloadToken((value:number) => value + 1);
     },
     pause: async (sandboxId: string) => {
       await pauseSandbox(settings, sandboxId);
-      setReloadToken((value) => value + 1);
+      setReloadToken((value:number) => value + 1);
     },
     resume: async (sandboxId: string) => {
       await resumeSandbox(settings, sandboxId);
-      setReloadToken((value) => value + 1);
+      setReloadToken((value:number) => value + 1);
     },
     remove: async (sandboxId: string) => {
       await deleteSandbox(settings, sandboxId);
-      setReloadToken((value) => value + 1);
+      setReloadToken((value:number) => value + 1);
     },
   };
 }
@@ -139,29 +149,29 @@ export function useSandboxDetails(sandboxId: string) {
     setEndpointPort,
     loading,
     error,
-    refresh: () => setReloadToken((value) => value + 1),
+    refresh: () => setReloadToken((value:number) => value + 1),
     pause: async () => {
       await pauseSandbox(settings, sandboxId);
-      setReloadToken((value) => value + 1);
+      setReloadToken((value:number) => value + 1);
     },
     resume: async () => {
       await resumeSandbox(settings, sandboxId);
-      setReloadToken((value) => value + 1);
+      setReloadToken((value:number) => value + 1);
     },
     remove: async () => {
       await deleteSandbox(settings, sandboxId);
-      setReloadToken((value) => value + 1);
+      setReloadToken((value:number) => value + 1);
     },
     renewExpiration: async (expiresAt: string) => {
       await renewSandboxExpiration(settings, sandboxId, { expiresAt });
-      setReloadToken((value) => value + 1);
+      setReloadToken((value:number) => value + 1);
     },
   };
 }
 
 export function useSandboxDiagnostics(sandboxId: string) {
   const { settings } = useSettings();
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsBundle | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsSections | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
@@ -172,14 +182,21 @@ export function useSandboxDiagnostics(sandboxId: string) {
     async function load() {
       setLoading(true);
       setError("");
+
       try {
-        const response = await fetchDiagnostics(settings, sandboxId);
+        const [summary, logs, inspect, events] = await Promise.all([
+          fetchDiagnosticsSummary(settings, sandboxId),
+          fetchDiagnosticsLogs(settings, sandboxId),
+          fetchDiagnosticsInspect(settings, sandboxId),
+          fetchDiagnosticsEvents(settings, sandboxId),
+        ]);
+
         if (!cancelled) {
-          setDiagnostics(response);
+          setDiagnostics({ summary, logs, inspect, events });
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Không thể lấy chẩn đoán và nhật ký.");
+          setError(err instanceof Error ? err.message : "Không thể lấy diagnostics.");
         }
       } finally {
         if (!cancelled) {
@@ -201,6 +218,58 @@ export function useSandboxDiagnostics(sandboxId: string) {
     diagnostics,
     loading,
     error,
-    refresh: () => setReloadToken((value) => value + 1),
+    refresh: () => setReloadToken((value:number) => value + 1),
+  };
+}
+
+export function useSandboxAdminData(sandboxId: string) {
+  const { settings } = useSettings();
+  const [note, setNote] = useState("");
+  const [tags, setTags] = useState<SandboxTagItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const [noteResponse, tagResponse] = await Promise.all([
+        fetchSandboxNote(settings, sandboxId),
+        fetchSandboxTags(settings, sandboxId),
+      ]);
+
+      setNote(noteResponse.note || "");
+      setTags(tagResponse.items || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Không thể tải note/tag.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, [sandboxId, settings]);
+
+  return {
+    note,
+    setNote,
+    tags,
+    loading,
+    error,
+    reload: load,
+    saveNote: async () => {
+      await saveSandboxNote(settings, sandboxId, note);
+      await load();
+    },
+    addTag: async (tag: string) => {
+      await createSandboxTag(settings, sandboxId, tag);
+      await load();
+    },
+    removeTag: async (tagId: number) => {
+      await deleteSandboxTag(settings, tagId);
+      await load();
+    },
   };
 }
