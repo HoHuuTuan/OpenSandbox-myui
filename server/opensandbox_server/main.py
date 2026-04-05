@@ -34,6 +34,12 @@ from opensandbox_server.config import load_config
 from opensandbox_server.integrations.renew_intent import start_renew_intent_consumer
 from uvicorn.config import LOGGING_CONFIG as UVICORN_LOGGING_CONFIG
 
+#DB and Router
+from opensandbox_server.api.admin import router as admin_router
+from opensandbox_server.db import Base, engine
+
+Base.metadata.create_all(bind=engine)
+
 # Load configuration before initializing routers/middleware
 app_config = load_config()
 
@@ -171,10 +177,13 @@ app.add_middleware(RequestIdMiddleware)
 app.include_router(router)
 app.include_router(devops_router)
 app.include_router(pool_router)
+app.include_router(admin_router)
 app.include_router(proxy_router)
+
 app.include_router(router, prefix="/v1")
 app.include_router(devops_router, prefix="/v1")
 app.include_router(pool_router, prefix="/v1")
+app.include_router(admin_router, prefix="/v1")
 app.include_router(proxy_router, prefix="/v1")
 
 DEFAULT_ERROR_CODE = "GENERAL::UNKNOWN_ERROR"

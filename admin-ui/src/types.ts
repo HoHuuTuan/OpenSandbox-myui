@@ -81,3 +81,26 @@ export interface CreateSandboxResponse {
 export interface RenewExpirationRequest {
   expiresAt: string;
 }
+
+export interface DiagnosticsSections {
+  summary: string;
+  logs: string;
+  inspect: string;
+  events: string;
+}
+
+export interface SandboxNoteResponse {
+  sandboxId: string;
+  note: string;
+  updatedAt?: string;
+}
+
+export interface SandboxTagItem {
+  id: number;
+  tag: string;
+}
+
+export interface SandboxTagsResponse {
+  sandboxId: string;
+  items: SandboxTagItem[];
+}

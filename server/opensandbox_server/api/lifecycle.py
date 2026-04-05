@@ -40,6 +40,8 @@ from opensandbox_server.api.schema import (
 )
 from opensandbox_server.services.factory import create_sandbox_service
 
+from opensandbox_server.services.admin_audit import write_action_log
+
 # Initialize router
 router = APIRouter(tags=["Sandboxes"])
 
@@ -65,6 +67,7 @@ sandbox_service = create_sandbox_service()
     },
 )
 async def create_sandbox(
+    
     request: CreateSandboxRequest,
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID", description="Unique request identifier for tracing"),
 ) -> CreateSandboxResponse:
@@ -86,7 +89,18 @@ async def create_sandbox(
         HTTPException: If sandbox creation scheduling fails
     """
     validate_extensions(request.extensions)
-    return await sandbox_service.create_sandbox(request)
+
+    response = await sandbox_service.create_sandbox(request)
+
+    write_action_log(
+        sandbox_id=response.id,
+        action="create",
+        status="success",
+        request_payload=request.model_dump(),
+        response_payload=response.model_dump(),
+    )
+
+    return response
 
 
 # Search endpoint
@@ -223,6 +237,13 @@ async def delete_sandbox(
     """
     # Delegate to the service layer for deletion
     sandbox_service.delete_sandbox(sandbox_id)
+
+    write_action_log(
+        sandbox_id=sandbox_id,
+        action="delete",
+        status="success",
+    )
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -264,6 +285,13 @@ async def pause_sandbox(
     """
     # Delegate to the service layer for pause orchestration
     sandbox_service.pause_sandbox(sandbox_id)
+
+    write_action_log(
+        sandbox_id=sandbox_id,
+        action="pause",
+        status="success",
+    )
+
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
@@ -301,6 +329,13 @@ async def resume_sandbox(
     """
     # Delegate to the service layer for resume orchestration
     sandbox_service.resume_sandbox(sandbox_id)
+
+    write_action_log(
+        sandbox_id=sandbox_id,
+        action="resume",
+        status="success",
+    )
+
     return Response(status_code=status.HTTP_202_ACCEPTED)
 
 
@@ -341,7 +376,17 @@ async def renew_sandbox_expiration(
         HTTPException: If sandbox not found or renewal fails
     """
     # Delegate to the service layer for expiration updates
-    return sandbox_service.renew_expiration(sandbox_id, request)
+    response = sandbox_service.renew_expiration(sandbox_id, request)
+
+    write_action_log(
+        sandbox_id=sandbox_id,
+        action="renew_expiration",
+        status="success",
+        request_payload=request.model_dump(),
+        response_payload=response.model_dump(),
+    )
+
+    return response
 
 
 # ============================================================================

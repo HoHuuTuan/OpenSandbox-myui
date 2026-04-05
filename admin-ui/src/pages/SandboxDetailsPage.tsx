@@ -7,13 +7,14 @@ import { LoadingBlock } from "../components/LoadingBlock";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatDate, formatRelativeFromNow } from "../lib/format";
-import { useSandboxDetails } from "./hooks";
+import { useSandboxAdminData, useSandboxDetails } from "./hooks";
 
 export function SandboxDetailsPage() {
   const { sandboxId = "" } = useParams();
   const [actionError, setActionError] = useState("");
   const [renewValue, setRenewValue] = useState("");
   const [busyAction, setBusyAction] = useState("");
+  const [newTag, setNewTag] = useState("");
   const {
     sandbox,
     loading,
@@ -27,6 +28,14 @@ export function SandboxDetailsPage() {
     remove,
     renewExpiration,
   } = useSandboxDetails(sandboxId);
+  const {
+    note,
+    setNote,
+    tags,
+    saveNote,
+    addTag,
+    removeTag,
+  } = useSandboxAdminData(sandboxId);
 
   if (loading) {
     return <LoadingBlock label="Đang tải chi tiết sandbox..." />;
@@ -127,7 +136,7 @@ export function SandboxDetailsPage() {
             { label: "ID", value: <span className="inline-code">{sandbox.id}</span> },
             { label: "Image", value: sandbox.image.uri },
             { label: "Ngày tạo", value: `${formatDate(sandbox.createdAt)} (${formatRelativeFromNow(sandbox.createdAt)})` },
-            { label: "Hết hạn", value: formatDate(sandbox.expiresAt) },
+            { label: "Hết hạn", value: formatDate(sandbox.expiresAt ?? undefined)},
             { label: "Lý do", value: sandbox.status.reason || "Chưa đặt" },
             { label: "Lần chuyển trạng thái cuối", value: formatDate(sandbox.status.lastTransitionAt) },
           ]}
@@ -151,8 +160,8 @@ export function SandboxDetailsPage() {
           <input
             className="text-input"
             value={endpointPort}
-            onChange={(event) => setEndpointPort(event.target.value)}
-            placeholder="Cổng bên trong sandbox, ví dụ 8080"
+            onChange={(event) => setEndpointPort(event.target.value.replace(/\D/g, ""))}
+            placeholder="Cổng bên trong sandbox, ví dụ 8090"
           />
           <button className="ghost-button" onClick={refresh}>
             Làm mới endpoint
@@ -228,6 +237,89 @@ export function SandboxDetailsPage() {
             ))}
           </div>
         )}
+      </section>
+
+      <section className="card">
+        <h3>Ghi chú quản trị</h3>
+        <textarea
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          placeholder="Nhập ghi chú nội bộ cho sandbox này"
+          rows={6}
+          style={{ width: "100%", marginTop: 12 }}
+        />
+        <div className="page-actions" style={{ marginTop: 12 }}>
+          <button
+            className="button"
+            onClick={async () => {
+              setActionError("");
+              try {
+                await saveNote();
+              } catch (err) {
+                setActionError(err instanceof Error ? err.message : "Lưu ghi chú thất bại.");
+              }
+            }}
+          >
+            Lưu ghi chú
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <h3>Tags</h3>
+        <div className="page-actions" style={{ marginTop: 12 }}>
+          <input
+            value={newTag}
+            onChange={(event) => setNewTag(event.target.value)}
+            placeholder="Nhập tag"
+          />
+          <button
+            className="button"
+            onClick={async () => {
+              if (!newTag.trim()) return;
+              setActionError("");
+              try {
+                await addTag(newTag.trim());
+                setNewTag("");
+              } catch (err) {
+                setActionError(err instanceof Error ? err.message : "Thêm tag thất bại.");
+              }
+            }}
+          >
+            Thêm tag
+          </button>
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {tags.map((tag) => (
+            <span
+              key={tag.id}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 10px",
+                borderRadius: 999,
+                border: "1px solid #ddd",
+              }}
+            >
+              {tag.tag}
+              <button
+                className="ghost-button"
+                onClick={async () => {
+                  setActionError("");
+                  try {
+                    await removeTag(tag.id);
+                  } catch (err) {
+                    setActionError(err instanceof Error ? err.message : "Xóa tag thất bại.");
+                  }
+                }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
       </section>
     </div>
   );
