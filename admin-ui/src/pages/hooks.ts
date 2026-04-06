@@ -169,3 +169,59 @@ export function useSandboxDetails(sandboxId: string, endpointPort: string, useSe
     },
   };
 }
+
+type Diagnostics = {
+  summary: string;
+  logs: string;
+  inspect: string;
+  events: string;
+};
+
+export function useSandboxDiagnostics(sandboxId: string) {
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setError("");
+
+      try {
+        const nextData: Diagnostics = {
+          summary: `Sandbox ID: ${sandboxId}\nChưa kết nối API chẩn đoán.`,
+          logs: "Chưa có endpoint logs.",
+          inspect: "Chưa có endpoint inspect.",
+          events: "Chưa có endpoint events.",
+        };
+
+        if (!cancelled) {
+          setDiagnostics(nextData);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setError(errorMessage(error, "Không thể tải chẩn đoán sandbox."));
+          setDiagnostics(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sandboxId, reloadToken]);
+
+  return {
+    diagnostics,
+    loading,
+    error,
+    refresh: () => setReloadToken((value) => value + 1),
+  };
+}

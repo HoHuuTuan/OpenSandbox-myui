@@ -5,7 +5,7 @@ Bản này sửa theo đúng Lifecycle API chính thức của OpenSandbox.
 ## Điểm đã sửa
 
 - Bỏ toàn bộ giả định sai về các endpoint `/admin/.../note` và `/admin/.../tags`.
-- Dùng đúng base URL mặc định: `http://127.0.0.1:8080/v1`.
+- Dùng đúng base URL mặc định: `http://127.0.0.1:8090/v1`.
 - Gọi đúng các endpoint chuẩn:
   - `GET /sandboxes`
   - `POST /sandboxes`

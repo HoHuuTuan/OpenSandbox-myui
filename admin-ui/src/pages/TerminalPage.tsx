@@ -11,15 +11,26 @@ type TabKey = "summary" | "logs" | "inspect" | "events";
 
 export function TerminalPage() {
   const { sandboxId = "" } = useParams();
-  const { diagnostics, loading, error, refresh } = useSandboxDiagnostics(sandboxId);
   const [activeTab, setActiveTab] = useState<TabKey>("summary");
 
+  const {
+    diagnostics,
+    loading,
+    error,
+    refresh,
+  } = useSandboxDiagnostics(sandboxId);
+
   if (loading) {
-    return <LoadingBlock label="Đang tải chẩn đoán..." />;
+    return <LoadingBlock text="Đang tải chẩn đoán..." />;
   }
 
   if (error || !diagnostics) {
-    return <EmptyState title="Không tải được chẩn đoán" body={error || "Không có đầu ra."} />;
+    return (
+      <EmptyState
+        title="Không tải được chẩn đoán"
+        description={error || "Không có đầu ra."}
+      />
+    );
   }
 
   const tabContent = diagnostics[activeTab];
@@ -27,7 +38,8 @@ export function TerminalPage() {
   return (
     <div className="grid">
       <PageHeader
-        title="Nhật Ký Và Terminal"
+        eyebrow="Sandbox"
+        title="Nhật ký và Terminal"
         subtitle={`Thông tin chẩn đoán cho sandbox ${sandboxId} từ các endpoint DevOps đang có.`}
         actions={
           <div className="page-actions">
@@ -43,16 +55,28 @@ export function TerminalPage() {
 
       <div className="card">
         <div className="page-actions">
-          <button className={activeTab === "summary" ? "button" : "ghost-button"} onClick={() => setActiveTab("summary")}>
+          <button
+            className={activeTab === "summary" ? "button" : "ghost-button"}
+            onClick={() => setActiveTab("summary")}
+          >
             Summary
           </button>
-          <button className={activeTab === "logs" ? "button" : "ghost-button"} onClick={() => setActiveTab("logs")}>
+          <button
+            className={activeTab === "logs" ? "button" : "ghost-button"}
+            onClick={() => setActiveTab("logs")}
+          >
             Logs
           </button>
-          <button className={activeTab === "inspect" ? "button" : "ghost-button"} onClick={() => setActiveTab("inspect")}>
+          <button
+            className={activeTab === "inspect" ? "button" : "ghost-button"}
+            onClick={() => setActiveTab("inspect")}
+          >
             Inspect
           </button>
-          <button className={activeTab === "events" ? "button" : "ghost-button"} onClick={() => setActiveTab("events")}>
+          <button
+            className={activeTab === "events" ? "button" : "ghost-button"}
+            onClick={() => setActiveTab("events")}
+          >
             Events
           </button>
         </div>

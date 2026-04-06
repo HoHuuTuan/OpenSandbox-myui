@@ -3,7 +3,7 @@ import type { AdminSettings } from "../types";
 const STORAGE_KEY = "opensandbox-admin-settings";
 
 export const defaultSettings: AdminSettings = {
-  apiBaseUrl: "http://127.0.0.1:8080/v1",
+  apiBaseUrl: "http://127.0.0.1:8090/v1",
   apiKey: "",
   autoRefreshSeconds: 10,
 };

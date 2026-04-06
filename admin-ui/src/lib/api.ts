@@ -2,7 +2,6 @@ import type {
   AdminSettings,
   CreateSandboxRequest,
   EndpointResponse,
-  ListSandboxesResponse,
   RenewExpirationRequest,
   Sandbox,
 } from "../types";

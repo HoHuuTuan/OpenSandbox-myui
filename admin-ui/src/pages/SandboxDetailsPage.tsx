@@ -10,7 +10,7 @@ import { useSandboxDetails } from "./hooks";
 export function SandboxDetailsPage() {
   const { sandboxId = "" } = useParams();
   const navigate = useNavigate();
-  const [endpointPort, setEndpointPort] = useState("8080");
+  const [endpointPort, setEndpointPort] = useState("8090");
   const [renewValue, setRenewValue] = useState("");
   const [useServerProxy, setUseServerProxy] = useState(false);
   const [actionError, setActionError] = useState("");
