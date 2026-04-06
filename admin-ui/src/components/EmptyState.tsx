@@ -1,14 +1,8 @@
-export function EmptyState({
-  title,
-  body,
-}: {
-  title: string;
-  body: string;
-}) {
+export function EmptyState({ title, description }: { title: string; description: string }) {
   return (
-    <section className="empty-state">
+    <div className="empty-state">
       <h3>{title}</h3>
-      <p>{body}</p>
-    </section>
+      <p>{description}</p>
+    </div>
   );
 }

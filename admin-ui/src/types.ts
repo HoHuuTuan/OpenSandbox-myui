@@ -23,8 +23,8 @@ export interface Sandbox {
   id: string;
   image: SandboxImage;
   status: SandboxStatus;
-  metadata?: Record<string, string>;
-  entrypoint: string[];
+  metadata?: Record<string, unknown>;
+  entrypoint?: string[];
   expiresAt?: string | null;
   createdAt: string;
 }
@@ -47,11 +47,6 @@ export interface EndpointResponse {
   headers?: Record<string, string>;
 }
 
-export interface DiagnosticsBundle {
-  summary: string;
-  logs: string;
-}
-
 export interface AdminSettings {
   apiBaseUrl: string;
   apiKey: string;
@@ -62,45 +57,13 @@ export interface CreateSandboxRequest {
   image: {
     uri: string;
   };
-  timeout?: number | null;
+  timeout?: number;
   resourceLimits: Record<string, string>;
   entrypoint: string[];
   env?: Record<string, string>;
   metadata?: Record<string, string>;
 }
 
-export interface CreateSandboxResponse {
-  id: string;
-  status: SandboxStatus;
-  metadata?: Record<string, string>;
-  expiresAt?: string | null;
-  createdAt: string;
-  entrypoint: string[];
-}
-
 export interface RenewExpirationRequest {
   expiresAt: string;
-}
-
-export interface DiagnosticsSections {
-  summary: string;
-  logs: string;
-  inspect: string;
-  events: string;
-}
-
-export interface SandboxNoteResponse {
-  sandboxId: string;
-  note: string;
-  updatedAt?: string;
-}
-
-export interface SandboxTagItem {
-  id: number;
-  tag: string;
-}
-
-export interface SandboxTagsResponse {
-  sandboxId: string;
-  items: SandboxTagItem[];
 }

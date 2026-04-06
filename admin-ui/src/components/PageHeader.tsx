@@ -1,22 +1,24 @@
 import type { ReactNode } from "react";
 
 export function PageHeader({
+  eyebrow,
   title,
   subtitle,
   actions,
 }: {
+  eyebrow: string;
   title: string;
-  subtitle?: string;
+  subtitle: string;
   actions?: ReactNode;
 }) {
   return (
-    <header className="page-header">
+    <div className="page-header">
       <div>
-        <p className="eyebrow">Operations</p>
+        <span className="eyebrow">{eyebrow}</span>
         <h2>{title}</h2>
-        {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
+        <p className="page-subtitle">{subtitle}</p>
       </div>
       {actions ? <div className="page-actions">{actions}</div> : null}
-    </header>
+    </div>
   );
 }

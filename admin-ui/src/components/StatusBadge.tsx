@@ -1,4 +1,6 @@
-export function StatusBadge({ state }: { state: string }) {
-  const tone = state.toLowerCase();
-  return <span className={`status-badge status-${tone}`}>{state}</span>;
+import type { SandboxState } from "../types";
+
+export function StatusBadge({ state }: { state: SandboxState }) {
+  const normalized = String(state).toLowerCase();
+  return <span className={`status-badge status-${normalized}`}>{state}</span>;
 }

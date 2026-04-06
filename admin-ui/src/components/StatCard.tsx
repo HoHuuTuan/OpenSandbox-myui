@@ -1,17 +1,9 @@
-export function StatCard({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-}) {
+export function StatCard({ title, value, helper }: { title: string; value: string | number; helper: string }) {
   return (
-    <section className="stat-card">
-      <p>{label}</p>
+    <article className="stat-card">
+      <p>{title}</p>
       <strong>{value}</strong>
-      {hint ? <span>{hint}</span> : null}
-    </section>
+      <span>{helper}</span>
+    </article>
   );
 }

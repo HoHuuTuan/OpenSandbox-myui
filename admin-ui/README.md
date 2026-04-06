@@ -1,36 +1,32 @@
-# Giao Diện Quản Trị OpenSandbox
+# OpenSandbox Admin UI - Fixed Lifecycle Version
 
-Ứng dụng React tách riêng cho quản trị OpenSandbox, sử dụng trực tiếp lifecycle API và diagnostics API.
+Bản này sửa theo đúng Lifecycle API chính thức của OpenSandbox.
 
-## Cách Chạy
+## Điểm đã sửa
+
+- Bỏ toàn bộ giả định sai về các endpoint `/admin/.../note` và `/admin/.../tags`.
+- Dùng đúng base URL mặc định: `http://127.0.0.1:8080/v1`.
+- Gọi đúng các endpoint chuẩn:
+  - `GET /sandboxes`
+  - `POST /sandboxes`
+  - `GET /sandboxes/{id}`
+  - `DELETE /sandboxes/{id}`
+  - `POST /sandboxes/{id}/pause`
+  - `POST /sandboxes/{id}/resume`
+  - `POST /sandboxes/{id}/renew-expiration`
+  - `GET /sandboxes/{id}/endpoints/{port}`
+- Thêm parse JSON an toàn để không còn lỗi `Unexpected end of JSON input` khi backend trả body rỗng cho `204 No Content`.
+- Giữ auto refresh và cấu hình API key trong localStorage.
+
+## Cách thay vào repo cũ
+
+1. Sao lưu `admin-ui/` cũ.
+2. Chép toàn bộ file trong thư mục này đè lên `admin-ui/`.
+3. Chạy:
 
 ```bash
-cd admin-ui
 npm install
 npm run dev
 ```
 
-Base URL mặc định của API được lấy từ `VITE_OPENSANDBOX_API_BASE_URL`.
-
-## Biến Môi Trường
-
-Có thể sao chép `.env.example` thành `.env` nếu muốn đổi giá trị mặc định.
-
-```bash
-VITE_OPENSANDBOX_API_BASE_URL=http://127.0.0.1:8080/v1
-VITE_OPENSANDBOX_AUTO_REFRESH_SECONDS=10
-```
-
-## Các Màn Hình
-
-- Tổng Quan
-- Danh Sách Sandbox
-- Chi Tiết Sandbox
-- Nhật Ký / Terminal
-- Cài Đặt
-
-## Ghi Chú Backend
-
-- `POST /sandboxes` tạo và tự động khởi động sandbox.
-- `DELETE /sandboxes/{id}` sẽ chấm dứt sandbox.
-- Backend hiện chưa có endpoint lifecycle riêng cho `start` hoặc `restart`.
+hoặc build Docker theo quy trình hiện tại của bạn.

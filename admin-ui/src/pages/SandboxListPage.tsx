@@ -1,180 +1,117 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-
-import { CreateSandboxForm } from "../components/CreateSandboxForm";
-import { DataTable } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingBlock } from "../components/LoadingBlock";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
-import { formatDate } from "../lib/format";
+import { formatDate, formatRelativeFromNow } from "../lib/format";
 import { useSandboxCollection } from "./hooks";
 
 export function SandboxListPage() {
-  const { sandboxes, loading, error, refresh, create, pause, resume, remove } = useSandboxCollection();
-  const [query, setQuery] = useState("");
-  const [state, setState] = useState("all");
-  const [busyId, setBusyId] = useState("");
-  const [createError, setCreateError] = useState("");
+  const [stateFilter, setStateFilter] = useState("");
+  const [metadataFilter, setMetadataFilter] = useState("");
 
-  const filtered = sandboxes.filter((sandbox) => {
-    const matchesState = state === "all" || sandbox.status.state === state;
-    const haystack = [
-      sandbox.id,
-      sandbox.image.uri,
-      sandbox.status.state,
-      ...(sandbox.entrypoint || []),
-      ...Object.entries(sandbox.metadata || {}).flat(),
-    ]
-      .join(" ")
-      .toLowerCase();
+  const filters = useMemo(
+    () => ({ state: stateFilter, metadata: metadataFilter, pageSize: 50 }),
+    [metadataFilter, stateFilter]
+  );
 
-    return matchesState && haystack.includes(query.trim().toLowerCase());
-  });
+  const { items, loading, error, refresh } = useSandboxCollection(filters);
 
   return (
     <div className="grid">
       <PageHeader
-        title="Danh Sách Sandbox"
-        subtitle="Lọc và duyệt toàn bộ sandbox hiện có từ lifecycle API."
+        eyebrow="Inventory"
+        title="Danh sách sandbox"
+        subtitle="Gọi trực tiếp các endpoint chuẩn của OpenSandbox Lifecycle API."
         actions={
-          <button className="button" onClick={refresh}>
-            Làm mới
-          </button>
+          <div style={{ display: "flex", gap: 12 }}>
+            <Link className="button secondary" to="/sandboxes/new">
+              Tạo sandbox
+            </Link>
+            <button className="button" onClick={refresh}>
+              Làm mới
+            </button>
+          </div>
         }
       />
 
-      <CreateSandboxForm
-        busy={busyId === "create"}
-        onCreate={async (request) => {
-          setBusyId("create");
-          setCreateError("");
-          try {
-            await create(request);
-          } catch (err) {
-            setCreateError(err instanceof Error ? err.message : "Tạo sandbox thất bại.");
-          } finally {
-            setBusyId("");
-          }
-        }}
-      />
+      <div className="panel filters">
+        <select
+          className="select-input"
+          value={stateFilter}
+          onChange={(e) => setStateFilter(e.target.value)}
+        >
+          <option value="">Tất cả trạng thái</option>
+          <option value="Pending">Pending</option>
+          <option value="Running">Running</option>
+          <option value="Paused">Paused</option>
+          <option value="Failed">Failed</option>
+          <option value="Terminated">Terminated</option>
+        </select>
 
-      {createError ? <EmptyState title="Tạo sandbox thất bại" body={createError} /> : null}
+        <input
+          className="search-input"
+          placeholder="VD: project=demo"
+          value={metadataFilter}
+          onChange={(e) => setMetadataFilter(e.target.value)}
+        />
+      </div>
+
+      {error ? <div className="error-banner">{error}</div> : null}
 
       <section className="panel">
         <div className="panel-header">
-          <h3>Ánh Xạ Vòng Đời</h3>
+          <h3>Sandbox hiện có</h3>
         </div>
-        <p className="helper-text">
-          Backend hiện có: create auto-starts sandbox, pause/resume điều khiển trạng thái, delete sẽ terminate. Không có endpoint start hoặc restart riêng trong repo.
-        </p>
-      </section>
 
-      <section className="panel">
-        <div className="filters">
-          <input
-            className="search-input"
-            placeholder="Tìm theo id, image, trạng thái, metadata..."
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
+        {loading ? (
+          <LoadingBlock />
+        ) : !Array.isArray(items) || items.length === 0 ? (
+          <EmptyState
+            title="Chưa có sandbox phù hợp"
+            description="Thử đổi filter hoặc tạo sandbox mới."
           />
-          <select className="select-input" value={state} onChange={(event) => setState(event.target.value)}>
-            <option value="all">Tất cả trạng thái</option>
-            <option value="Pending">Đang chờ</option>
-            <option value="Running">Đang chạy</option>
-            <option value="Pausing">Pausing</option>
-            <option value="Paused">Tạm dừng</option>
-            <option value="Stopping">Stopping</option>
-            <option value="Terminated">Terminated</option>
-            <option value="Failed">Thất bại</option>
-          </select>
-        </div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Image</th>
+                  <th>Trạng thái</th>
+                  <th>Tạo lúc</th>
+                  <th>Hết hạn</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((sandbox) => (
+                  <tr key={sandbox.id}>
+                    <td className="inline-code">{sandbox.id}</td>
+                    <td>{sandbox.image?.uri ?? "—"}</td>
+                    <td>
+                      <StatusBadge state={sandbox.status.state} />
+                    </td>
+                    <td>
+                      {formatDate(sandbox.createdAt)}
+                      <div className="helper-text">
+                        {formatRelativeFromNow(sandbox.createdAt)}
+                      </div>
+                    </td>
+                    <td>{formatDate(sandbox.expiresAt)}</td>
+                    <td>
+                      <Link className="ghost-button" to={`/sandboxes/${sandbox.id}`}>
+                        Chi tiết
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
-
-      {error ? <EmptyState title="Không tải được danh sách sandbox" body={error} /> : null}
-      {loading ? <LoadingBlock label="Đang tải danh sách sandbox..." /> : null}
-
-      {!loading && filtered.length === 0 ? (
-        <EmptyState title="Không có kết quả phù hợp" body="Hãy mở rộng điều kiện tìm kiếm hoặc kiểm tra cài đặt server." />
-      ) : null}
-
-      {!loading && filtered.length > 0 ? (
-        <section className="panel">
-          <DataTable headers={["Sandbox", "Image", "Trạng Thái", "Ngày Tạo", "Tác Vụ"]}>
-            {filtered.map((sandbox) => (
-              <tr key={sandbox.id}>
-                <td>
-                  <div className="inline-code">{sandbox.id}</div>
-                </td>
-                <td>{sandbox.image.uri}</td>
-                <td>
-                  <StatusBadge state={sandbox.status.state} />
-                </td>
-                <td>{formatDate(sandbox.createdAt)}</td>
-                <td>
-                  <div className="row-actions">
-                    <Link className="ghost-button" to={`/sandboxes/${sandbox.id}`}>
-                      Chi tiết
-                    </Link>
-                    <Link className="ghost-button" to={`/sandboxes/${sandbox.id}/terminal`}>
-                      Nhật ký
-                    </Link>
-                    {sandbox.status.state === "Running" ? (
-                      <button
-                        className="ghost-button"
-                        onClick={async () => {
-                          setBusyId(`pause:${sandbox.id}`);
-                          try {
-                            await pause(sandbox.id);
-                          } finally {
-                            setBusyId("");
-                          }
-                        }}
-                        disabled={busyId === `pause:${sandbox.id}`}
-                      >
-                        Tạm dừng
-                      </button>
-                    ) : null}
-                    {sandbox.status.state === "Paused" ? (
-                      <button
-                        className="ghost-button"
-                        onClick={async () => {
-                          setBusyId(`resume:${sandbox.id}`);
-                          try {
-                            await resume(sandbox.id);
-                          } finally {
-                            setBusyId("");
-                          }
-                        }}
-                        disabled={busyId === `resume:${sandbox.id}`}
-                      >
-                        Tiếp tục
-                      </button>
-                    ) : null}
-                    <button
-                      className="ghost-button"
-                      onClick={async () => {
-                        setBusyId(`delete:${sandbox.id}`);
-                        try {
-                          await remove(sandbox.id);
-                        } finally {
-                          setBusyId("");
-                        }
-                      }}
-                      disabled={busyId === `delete:${sandbox.id}`}
-                    >
-                      Xóa
-                    </button>
-                    <button className="ghost-button" disabled title="Backend hiện chưa có endpoint restart">
-                      Chưa hỗ trợ restart
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </DataTable>
-        </section>
-      ) : null}
     </div>
   );
 }

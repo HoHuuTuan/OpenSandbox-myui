@@ -1,40 +1,37 @@
-import { useEffect, useState } from "react";
-
+import { useEffect, useMemo, useState } from "react";
 import { useSettings } from "../context/settings";
 import {
   createSandbox,
-  createSandboxTag,
   deleteSandbox,
-  deleteSandboxTag,
-  fetchDiagnosticsEvents,
-  fetchDiagnosticsInspect,
-  fetchDiagnosticsLogs,
-  fetchDiagnosticsSummary,
   fetchSandbox,
   fetchSandboxEndpoint,
-  fetchSandboxNote,
-  fetchSandboxTags,
   fetchSandboxes,
   pauseSandbox,
   renewSandboxExpiration,
   resumeSandbox,
-  saveSandboxNote,
 } from "../lib/api";
+import type { CreateSandboxRequest, EndpointResponse, Sandbox } from "../types";
 
-import type {
-  CreateSandboxRequest,
-  DiagnosticsSections,
-  EndpointResponse,
-  Sandbox,
-  SandboxTagItem,
-} from "../types";
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
 
-export function useSandboxCollection() {
+export function useSandboxCollection(filters: { state: string; metadata: string; pageSize: number }) {
   const { settings } = useSettings();
-  const [sandboxes, setSandboxes] = useState<Sandbox[]>([]);
+  const [items, setItems] = useState<Sandbox[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [reloadToken, setReloadToken] = useState<number>(0);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [busy, setBusy] = useState(false);
+
+  const requestParams = useMemo(
+    () => ({
+      state: filters.state || undefined,
+      metadata: filters.metadata || undefined,
+      pageSize: filters.pageSize,
+    }),
+    [filters.metadata, filters.pageSize, filters.state],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -44,58 +41,69 @@ export function useSandboxCollection() {
       setError("");
 
       try {
-        const response = await fetchSandboxes(settings);
-        if (!cancelled) {
-          setSandboxes(response.items);
+        const response = await fetchSandboxes(settings, requestParams);
+        console.log("[fetchSandboxes response]", response);
+
+        let nextItems: Sandbox[] = [];
+
+        if (Array.isArray(response)) {
+          nextItems = response;
+        } else if (Array.isArray((response as any)?.items)) {
+          nextItems = (response as any).items;
+        } else if (Array.isArray((response as any)?.sandboxes)) {
+          nextItems = (response as any).sandboxes;
+        } else {
+          nextItems = [];
         }
-      } catch (err) {
+
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Không thể lấy danh sách sandbox.");
+          setItems(nextItems);
+        }
+      } catch (error) {
+        console.error("[useSandboxCollection load error]", error);
+        if (!cancelled) {
+          setError(errorMessage(error, "Không thể tải danh sách sandbox."));
+          setItems([]);
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
     load();
-    const timer = window.setInterval(load, settings.autoRefreshSeconds * 1000);
+
+    const timer = window.setInterval(
+      load,
+      Math.max(settings.autoRefreshSeconds, 3) * 1000
+    );
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [settings, reloadToken]);
+  }, [requestParams, reloadToken, settings]);
 
   return {
-    sandboxes,
+    items,
     loading,
     error,
-    refresh: () => setReloadToken((value:number) => value + 1),
-    create: async (request: CreateSandboxRequest) => {
-      await createSandbox(settings, request);
-      setReloadToken((value:number) => value + 1);
-    },
-    pause: async (sandboxId: string) => {
-      await pauseSandbox(settings, sandboxId);
-      setReloadToken((value:number) => value + 1);
-    },
-    resume: async (sandboxId: string) => {
-      await resumeSandbox(settings, sandboxId);
-      setReloadToken((value:number) => value + 1);
-    },
-    remove: async (sandboxId: string) => {
-      await deleteSandbox(settings, sandboxId);
-      setReloadToken((value:number) => value + 1);
+    busy,
+    refresh: () => setReloadToken((value) => value + 1),
+    create: async (payload: CreateSandboxRequest) => {
+      setBusy(true);
+      try {
+        await createSandbox(settings, payload);
+        setReloadToken((value) => value + 1);
+      } finally {
+        setBusy(false);
+      }
     },
   };
 }
 
-export function useSandboxDetails(sandboxId: string) {
+export function useSandboxDetails(sandboxId: string, endpointPort: string, useServerProxy: boolean) {
   const { settings } = useSettings();
   const [sandbox, setSandbox] = useState<Sandbox | null>(null);
-  const [endpointPort, setEndpointPort] = useState("8080");
   const [endpoint, setEndpoint] = useState<EndpointResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -103,173 +111,61 @@ export function useSandboxDetails(sandboxId: string) {
 
   useEffect(() => {
     let cancelled = false;
-
     async function load() {
       setLoading(true);
       setError("");
-
       try {
-        const sandboxResponse = await fetchSandbox(settings, sandboxId);
-        let endpointResponse: EndpointResponse | null = null;
-
+        const sandboxData = await fetchSandbox(settings, sandboxId);
+        let endpointData: EndpointResponse | null = null;
         if (endpointPort.trim()) {
           try {
-            endpointResponse = await fetchSandboxEndpoint(settings, sandboxId, endpointPort.trim());
+            endpointData = await fetchSandboxEndpoint(settings, sandboxId, endpointPort.trim(), useServerProxy);
           } catch {
-            endpointResponse = null;
+            endpointData = null;
           }
         }
-
         if (!cancelled) {
-          setSandbox(sandboxResponse);
-          setEndpoint(endpointResponse);
+          setSandbox(sandboxData);
+          setEndpoint(endpointData);
         }
-      } catch (err) {
+      } catch (error) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Không thể lấy chi tiết sandbox.");
+          setError(errorMessage(error, "Không thể tải chi tiết sandbox."));
           setSandbox(null);
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
-
     load();
-    return () => {
-      cancelled = true;
-    };
-  }, [settings, sandboxId, endpointPort, reloadToken]);
-
-  return {
-    sandbox,
-    endpoint,
-    endpointPort,
-    setEndpointPort,
-    loading,
-    error,
-    refresh: () => setReloadToken((value:number) => value + 1),
-    pause: async () => {
-      await pauseSandbox(settings, sandboxId);
-      setReloadToken((value:number) => value + 1);
-    },
-    resume: async () => {
-      await resumeSandbox(settings, sandboxId);
-      setReloadToken((value:number) => value + 1);
-    },
-    remove: async () => {
-      await deleteSandbox(settings, sandboxId);
-      setReloadToken((value:number) => value + 1);
-    },
-    renewExpiration: async (expiresAt: string) => {
-      await renewSandboxExpiration(settings, sandboxId, { expiresAt });
-      setReloadToken((value:number) => value + 1);
-    },
-  };
-}
-
-export function useSandboxDiagnostics(sandboxId: string) {
-  const { settings } = useSettings();
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsSections | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [reloadToken, setReloadToken] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      setError("");
-
-      try {
-        const [summary, logs, inspect, events] = await Promise.all([
-          fetchDiagnosticsSummary(settings, sandboxId),
-          fetchDiagnosticsLogs(settings, sandboxId),
-          fetchDiagnosticsInspect(settings, sandboxId),
-          fetchDiagnosticsEvents(settings, sandboxId),
-        ]);
-
-        if (!cancelled) {
-          setDiagnostics({ summary, logs, inspect, events });
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Không thể lấy diagnostics.");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    load();
-    const timer = window.setInterval(load, settings.autoRefreshSeconds * 1000);
-
+    const timer = window.setInterval(load, Math.max(settings.autoRefreshSeconds, 3) * 1000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [settings, sandboxId, reloadToken]);
+  }, [endpointPort, reloadToken, sandboxId, settings, useServerProxy]);
 
   return {
-    diagnostics,
+    sandbox,
+    endpoint,
     loading,
     error,
-    refresh: () => setReloadToken((value:number) => value + 1),
-  };
-}
-
-export function useSandboxAdminData(sandboxId: string) {
-  const { settings } = useSettings();
-  const [note, setNote] = useState("");
-  const [tags, setTags] = useState<SandboxTagItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  async function load() {
-    setLoading(true);
-    setError("");
-
-    try {
-      const [noteResponse, tagResponse] = await Promise.all([
-        fetchSandboxNote(settings, sandboxId),
-        fetchSandboxTags(settings, sandboxId),
-      ]);
-
-      setNote(noteResponse.note || "");
-      setTags(tagResponse.items || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Không thể tải note/tag.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, [sandboxId, settings]);
-
-  return {
-    note,
-    setNote,
-    tags,
-    loading,
-    error,
-    reload: load,
-    saveNote: async () => {
-      await saveSandboxNote(settings, sandboxId, note);
-      await load();
+    refresh: () => setReloadToken((value) => value + 1),
+    pause: async () => {
+      await pauseSandbox(settings, sandboxId);
+      setReloadToken((value) => value + 1);
     },
-    addTag: async (tag: string) => {
-      await createSandboxTag(settings, sandboxId, tag);
-      await load();
+    resume: async () => {
+      await resumeSandbox(settings, sandboxId);
+      setReloadToken((value) => value + 1);
     },
-    removeTag: async (tagId: number) => {
-      await deleteSandboxTag(settings, tagId);
-      await load();
+    remove: async () => {
+      await deleteSandbox(settings, sandboxId);
+      setReloadToken((value) => value + 1);
+    },
+    renewExpiration: async (expiresAt: string) => {
+      await renewSandboxExpiration(settings, sandboxId, { expiresAt });
+      setReloadToken((value) => value + 1);
     },
   };
 }

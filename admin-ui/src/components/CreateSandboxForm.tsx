@@ -1,133 +1,93 @@
-import type { FormEvent } from "react";
 import { useState } from "react";
-
+import { parseKeyValueText } from "../lib/format";
 import type { CreateSandboxRequest } from "../types";
 
-interface CreateSandboxFormProps {
+const initialState = {
+  imageUri: "opensandbox/code-interpreter:v1.0.2",
+  timeout: "3600",
+  entrypoint: "/opt/opensandbox/code-interpreter.sh",
+  cpu: "500m",
+  memory: "512Mi",
+  envText: "PYTHON_VERSION=3.11",
+  metadataText: "project=demo",
+};
+
+export function CreateSandboxForm({
+  onSubmit,
+  busy,
+}: {
+  onSubmit: (payload: CreateSandboxRequest) => Promise<void>;
   busy: boolean;
-  onCreate: (request: CreateSandboxRequest) => Promise<void>;
-}
+}) {
+  const [form, setForm] = useState(initialState);
 
-function parseRecordInput(input: string) {
-  return input
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .reduce<Record<string, string>>((accumulator, line) => {
-      const separatorIndex = line.indexOf("=");
-      if (separatorIndex === -1) {
-        return accumulator;
-      }
-      const key = line.slice(0, separatorIndex).trim();
-      const value = line.slice(separatorIndex + 1).trim();
-      if (key) {
-        accumulator[key] = value;
-      }
-      return accumulator;
-    }, {});
-}
-
-export function CreateSandboxForm({ busy, onCreate }: CreateSandboxFormProps) {
-  const [image, setImage] = useState("python:3.11-slim");
-  const [entrypoint, setEntrypoint] = useState("python -m http.server 8000");
-  const [timeout, setTimeoutValue] = useState("3600");
-  const [cpu, setCpu] = useState("500m");
-  const [memory, setMemory] = useState("512Mi");
-  const [envText, setEnvText] = useState("PYTHONUNBUFFERED=1");
-  const [metadataText, setMetadataText] = useState("name=Sandbox-quan-tri");
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const request: CreateSandboxRequest = {
-      image: { uri: image.trim() },
-      entrypoint: entrypoint
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean),
-      resourceLimits: {
-        cpu: cpu.trim(),
-        memory: memory.trim(),
-      },
-      timeout: timeout.trim() ? Number(timeout.trim()) : null,
-    };
-
-    const env = parseRecordInput(envText);
-    const metadata = parseRecordInput(metadataText);
-
-    if (Object.keys(env).length > 0) {
-      request.env = env;
-    }
-    if (Object.keys(metadata).length > 0) {
-      request.metadata = metadata;
-    }
-
-    await onCreate(request);
+  function update<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
   }
+  
 
   return (
-    <section className="panel">
+    <form
+      className="panel grid"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const payload: CreateSandboxRequest = {
+          image: { uri: form.imageUri.trim() },
+          timeout: Number(form.timeout) || 3600,
+          entrypoint: form.entrypoint
+            .split(" ")
+            .map((item) => item.trim())
+            .filter(Boolean),
+          resourceLimits: {
+            cpu: form.cpu.trim(),
+            memory: form.memory.trim(),
+          },
+          env: parseKeyValueText(form.envText),
+          metadata: parseKeyValueText(form.metadataText),
+        };
+        await onSubmit(payload);
+      }}
+    >
       <div className="panel-header">
-        <h3>Tạo Sandbox</h3>
+        <h3>Tạo sandbox mới</h3>
       </div>
-      <form className="settings-form" onSubmit={handleSubmit}>
+      <label>
+        Image URI
+        <input className="text-input" value={form.imageUri} onChange={(e) => update("imageUri", e.target.value)} />
+      </label>
+      <div className="two-column">
         <label>
-          Image URI
-          <input className="text-input" value={image} onChange={(event) => setImage(event.target.value)} />
+          Timeout (giây)
+          <input className="text-input" value={form.timeout} onChange={(e) => update("timeout", e.target.value)} />
         </label>
-
         <label>
-          Lệnh Khởi Động
-          <input
-            className="text-input"
-            value={entrypoint}
-            onChange={(event) => setEntrypoint(event.target.value)}
-            placeholder="python -m http.server 8000"
-          />
+          Entrypoint
+          <input className="text-input" value={form.entrypoint} onChange={(e) => update("entrypoint", e.target.value)} />
         </label>
-
-        <div className="detail-grid">
-          <label>
-            Thời Gian Hết Hạn (giây)
-            <input className="text-input" value={timeout} onChange={(event) => setTimeoutValue(event.target.value)} />
-          </label>
-          <label>
-            CPU
-            <input className="text-input" value={cpu} onChange={(event) => setCpu(event.target.value)} />
-          </label>
-        </div>
-
+      </div>
+      <div className="two-column">
         <label>
-          Memory
-          <input className="text-input" value={memory} onChange={(event) => setMemory(event.target.value)} />
+          CPU limit
+          <input className="text-input" value={form.cpu} onChange={(e) => update("cpu", e.target.value)} />
         </label>
-
         <label>
-          Biến Môi Trường
-          <textarea
-            className="text-area"
-            value={envText}
-            onChange={(event) => setEnvText(event.target.value)}
-            placeholder={"KEY=value"}
-          />
+          Memory limit
+          <input className="text-input" value={form.memory} onChange={(e) => update("memory", e.target.value)} />
         </label>
-
-        <label>
-          Metadata
-          <textarea
-            className="text-area"
-            value={metadataText}
-            onChange={(event) => setMetadataText(event.target.value)}
-            placeholder={"name=Sandbox\nteam=platform"}
-          />
-        </label>
-
-        <div className="page-actions">
-          <button className="button" type="submit" disabled={busy}>
-            {busy ? "Đang tạo..." : "Tạo sandbox"}
-          </button>
-        </div>
-      </form>
-    </section>
+      </div>
+      <label>
+        Environment (mỗi dòng dạng KEY=VALUE)
+        <textarea className="text-area" value={form.envText} onChange={(e) => update("envText", e.target.value)} />
+      </label>
+      <label>
+        Metadata (mỗi dòng dạng KEY=VALUE)
+        <textarea className="text-area" value={form.metadataText} onChange={(e) => update("metadataText", e.target.value)} />
+      </label>
+      <div>
+        <button className="button" type="submit" disabled={busy}>
+          {busy ? "Đang tạo..." : "Tạo sandbox"}
+        </button>
+      </div>
+    </form>
   );
 }
