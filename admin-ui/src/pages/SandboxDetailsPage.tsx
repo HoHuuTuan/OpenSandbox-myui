@@ -6,13 +6,14 @@ import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatDate, formatRelativeFromNow } from "../lib/format";
 import { useSandboxDetails } from "./hooks";
+import ExecutionPanel from "../components/ExecutionPanel";
 
 export function SandboxDetailsPage() {
   const { sandboxId = "" } = useParams();
   const navigate = useNavigate();
-  const [endpointPort, setEndpointPort] = useState("8090");
+  const [endpointPort, setEndpointPort] = useState("44772");
   const [renewValue, setRenewValue] = useState("");
-  const [useServerProxy, setUseServerProxy] = useState(false);
+  const [useServerProxy, setUseServerProxy] = useState(true);
   const [actionError, setActionError] = useState("");
   const [busyAction, setBusyAction] = useState("");
   const { sandbox, endpoint, loading, error, refresh, pause, resume, remove, renewExpiration } = useSandboxDetails(
@@ -177,6 +178,10 @@ export function SandboxDetailsPage() {
             </table>
           </div>
         )}
+        <ExecutionPanel
+          endpoint={endpoint?.endpoint ?? ""}
+          endpointHeaders={endpoint?.headers ?? {}}
+        />
       </section>
     </div>
   );

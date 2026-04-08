@@ -6,12 +6,20 @@ import type {
   Sandbox,
 } from "../types";
 
+type ApiSettings = any;
+
+type ExecResult = {
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number;
+};
+
 interface RequestOptions extends RequestInit {
   allowEmptyJson?: boolean;
 }
 
 function normalizeBaseUrl(baseUrl: string) {
-  return baseUrl.trim().replace(/\/$/, "");
+   return (baseUrl ?? "").trim().replace(/\/$/, "");
 }
 
 async function parseJsonSafely(response: Response, allowEmptyJson = false) {
@@ -34,11 +42,11 @@ async function request<T>(settings: AdminSettings, path: string, options: Reques
   if (options.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  if (settings.apiKey.trim()) {
+  if ((settings?.apiKey ?? "").trim()) {
     headers.set("OPEN-SANDBOX-API-KEY", settings.apiKey.trim());
   }
 
-  const response = await fetch(`${normalizeBaseUrl(settings.apiBaseUrl)}${path}`, {
+  const response = await fetch(`${normalizeBaseUrl(settings?.apiBaseUrl ?? "")}${path}`, {
     ...options,
     headers,
   });
@@ -136,4 +144,42 @@ export function fetchSandboxEndpoint(
 ) {
   const query = useServerProxy ? "?use_server_proxy=true" : "";
   return request<EndpointResponse>(settings, `/sandboxes/${sandboxId}/endpoints/${port}${query}`);
+}
+
+export function proxyPing(settings: any, sandboxId: string, port = "44772") {
+  return request(settings, `/sandboxes/${sandboxId}/proxy/${port}/ping`);
+}
+
+export async function runCommand(
+  settings: ApiSettings,
+  sandboxId: string,
+  command: string,
+  port = "44772"
+): Promise<ExecResult> {
+  return request(settings, `/sandboxes/${sandboxId}/proxy/${port}/command`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      command,
+    }),
+  });
+}
+
+export async function runCode(
+  settings: ApiSettings,
+  sandboxId: string,
+  code: string,
+  port = "44772"
+): Promise<ExecResult> {
+  return request(settings, `/sandboxes/${sandboxId}/proxy/${port}/code`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      code,
+    }),
+  });
 }
