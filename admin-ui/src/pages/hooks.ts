@@ -92,8 +92,9 @@ export function useSandboxCollection(filters: { state: string; metadata: string;
     create: async (payload: CreateSandboxRequest) => {
       setBusy(true);
       try {
-        await createSandbox(settings, payload);
+        const created = await createSandbox(settings, payload);
         setReloadToken((value) => value + 1);
+        return created;
       } finally {
         setBusy(false);
       }

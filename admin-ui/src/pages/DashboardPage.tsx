@@ -21,7 +21,7 @@ export function DashboardPage() {
       <PageHeader
         eyebrow="Operations"
         title="Tổng quan"
-        subtitle="Theo dõi nhanh trạng thái sandbox và đi tới thao tác chi tiết."
+        subtitle="Theo dõi nhanh trạng thái sandbox và đi tới workbench chi tiết cho từng agent workload."
         actions={<button className="button" onClick={refresh}>Làm mới</button>}
       />
       {error ? <div className="error-banner">{error}</div> : null}
@@ -36,7 +36,8 @@ export function DashboardPage() {
           <h3>Truy cập nhanh</h3>
         </div>
         <div className="page-actions">
-          <Link className="button" to="/sandboxes">Mở danh sách sandbox</Link>
+          <Link className="button" to="/lab">Mở Agent Lab</Link>
+          <Link className="ghost-button" to="/sandboxes">Mở danh sách sandbox</Link>
           <Link className="ghost-button" to="/settings">Cấu hình API</Link>
         </div>
       </div>

@@ -6,15 +6,23 @@ export function AppShell() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-kicker">OpenSandbox</span>
-          <h1>Giao diện quản trị</h1>
-          <p className="sidebar-subtitle">UI này gọi trực tiếp OpenSandbox Lifecycle API.</p>
+          <h1>Agent Lab</h1>
+          <p className="sidebar-subtitle">
+            Lifecycle, execd, browser ports và desktop surfaces cho việc test agent.
+          </p>
         </div>
         <nav className="nav">
+          <NavLink className="nav-link" to="/lab">
+            Agent Lab
+          </NavLink>
           <NavLink className="nav-link" to="/dashboard">
             Tổng quan
           </NavLink>
           <NavLink className="nav-link" to="/sandboxes">
-            Danh sách sandbox
+            Sandbox Workloads
+          </NavLink>
+          <NavLink className="nav-link" to="/sandboxes/new">
+            Tạo từ template
           </NavLink>
           <NavLink className="nav-link" to="/settings">
             Cài đặt API

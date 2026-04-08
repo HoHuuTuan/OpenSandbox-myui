@@ -67,3 +67,21 @@ export interface CreateSandboxRequest {
 export interface RenewExpirationRequest {
   expiresAt: string;
 }
+
+export interface CommandStatus {
+  id: string;
+  content?: string;
+  running: boolean;
+  exit_code?: number | null;
+  error?: string;
+  started_at?: string;
+  finished_at?: string | null;
+}
+
+export interface MetricsSnapshot {
+  cpu_count: number;
+  cpu_used_pct: number;
+  mem_total_mib: number;
+  mem_used_mib: number;
+  timestamp: number;
+}
