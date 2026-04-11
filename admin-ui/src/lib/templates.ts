@@ -72,7 +72,7 @@ export const sandboxTemplates: SandboxTemplate[] = [
     description: "Desktop đầy đủ với VNC/noVNC để test GUI agent hoặc quan sát thao tác trực tiếp.",
     imageUri: "opensandbox/desktop:latest",
     timeout: "3600",
-    entrypoint: "tail -f /dev/null",
+    entrypoint: "/home/desktop/start-desktop.sh",
     cpu: "1000m",
     memory: "2Gi",
     envText: "PYTHON_VERSION=3.11\nVNC_PASSWORD=opensandbox",

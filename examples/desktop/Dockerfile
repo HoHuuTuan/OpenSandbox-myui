@@ -58,7 +58,10 @@ RUN groupadd -r desktop && useradd -r -g desktop -G audio,video desktop \
 
 WORKDIR /home/desktop
 
-USER desktop
+COPY --chown=desktop:desktop start-desktop.sh /home/desktop/start-desktop.sh
+RUN chmod +x /home/desktop/start-desktop.sh
 
-# Default to bash
-CMD ["bash"]
+USER desktop
+EXPOSE 5900 6080
+
+CMD ["/home/desktop/start-desktop.sh"]
