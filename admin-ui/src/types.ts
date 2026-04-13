@@ -59,7 +59,7 @@ export interface CreateSandboxRequest {
   };
   timeout?: number;
   resourceLimits: Record<string, string>;
-  entrypoint: string[];
+  entrypoint?: string[];
   env?: Record<string, string>;
   metadata?: Record<string, string>;
 }

@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from opensandbox_server.db import get_db
 from opensandbox_server.models.admin import SandboxNote, SandboxTag
-from opensandbox_server.models import Sandbox, Tag
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -50,7 +49,12 @@ def upsert_note(sandbox_id: str, request: NoteUpsertRequest, db: Session = Depen
 
 @router.get("/sandboxes/{sandbox_id}/tags")
 def list_tags(sandbox_id: str, db: Session = Depends(get_db)):
-    rows = db.query(SandboxTag).filter(SandboxTag.sandbox_id == sandbox_id).order_by(SandboxTag.id.desc()).all()
+    rows = (
+        db.query(SandboxTag)
+        .filter(SandboxTag.sandbox_id == sandbox_id)
+        .order_by(SandboxTag.id.desc())
+        .all()
+    )
     return {
         "sandboxId": sandbox_id,
         "items": [{"id": row.id, "tag": row.tag} for row in rows],
@@ -84,20 +88,3 @@ def delete_tag(tag_id: int, db: Session = Depends(get_db)):
     db.delete(row)
     db.commit()
     return {"ok": True}
-
-# Route để lấy tags của sandbox
-@router.get("/admin/sandboxes/{sandbox_id}/tags")
-def get_tags(sandbox_id: str, db: Session = Depends(get_db)):
-    tags = db.query(Tag).filter(Tag.sandbox_id == sandbox_id).all()
-    return tags
-
-# Route để cập nhật ghi chú cho sandbox
-@router.put("/admin/sandboxes/{sandbox_id}/note")
-def update_note(sandbox_id: str, note: str, db: Session = Depends(get_db)):
-    sandbox = db.query(Sandbox).filter(Sandbox.id == sandbox_id).first()
-    if sandbox:
-        sandbox.note = note
-        db.commit()
-        return {"message": "Note updated successfully"}
-    else:
-        return {"error": "Sandbox not found"}

@@ -627,8 +627,19 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         entrypoint = container.attrs.get("Config", {}).get("Cmd") or []
         if isinstance(entrypoint, str):
             entrypoint = [entrypoint]
-        image_tags = container.image.tags
-        image_uri = image_tags[0] if image_tags else container.image.short_id
+        config_section = container.attrs.get("Config", {}) or {}
+        image_uri = config_section.get("Image")
+        if not image_uri:
+            image_uri = container.attrs.get("Image")
+        try:
+            image_tags = container.image.tags
+            image_uri = image_tags[0] if image_tags else image_uri or container.image.short_id
+        except ImageNotFound:
+            logger.warning(
+                "sandbox=%s | action=resolve sandbox image | image metadata missing; using container attrs fallback",
+                resolved_id,
+            )
+            image_uri = image_uri or container.attrs.get("Image") or "unknown"
         image_spec = ImageSpec(uri=image_uri)
 
         created_at = parse_timestamp(container.attrs.get("Created"))
@@ -753,6 +764,54 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         return sandbox_id, created_at, expires_at
 
     @staticmethod
+    def _normalize_command_parts(parts: Any) -> list[str]:
+        if not parts:
+            return []
+        if isinstance(parts, str):
+            return [parts]
+        if isinstance(parts, (list, tuple)):
+            return [str(part) for part in parts if str(part).strip()]
+        return [str(parts)]
+
+    def _resolve_requested_entrypoint(
+        self,
+        request: CreateSandboxRequest,
+        sandbox_id: str,
+    ) -> CreateSandboxRequest:
+        if request.entrypoint:
+            return request
+
+        image_uri = request.image.uri
+        auth_config = None
+        if request.image.auth:
+            auth_config = {
+                "username": request.image.auth.username,
+                "password": request.image.auth.password,
+            }
+
+        self._ensure_image_available(image_uri, auth_config, sandbox_id)
+
+        try:
+            with self._docker_operation(f"inspect image config {image_uri}", sandbox_id):
+                image = self.docker_client.images.get(image_uri)
+        except DockerException as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "code": SandboxErrorCodes.IMAGE_PULL_FAILED,
+                    "message": f"Failed to inspect image config for {image_uri}: {str(exc)}",
+                },
+            ) from exc
+
+        config = image.attrs.get("Config", {}) or {}
+        resolved_entrypoint = [
+            *self._normalize_command_parts(config.get("Entrypoint")),
+            *self._normalize_command_parts(config.get("Cmd")),
+        ]
+        ensure_entrypoint(resolved_entrypoint)
+        return request.model_copy(update={"entrypoint": resolved_entrypoint})
+
+    @staticmethod
     def _allocate_host_port(
         min_port: int = 40000, max_port: int = 60000, attempts: int = 50
     ) -> Optional[int]:
@@ -781,7 +840,6 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         Raises:
             HTTPException: If sandbox creation fails
         """
-        ensure_entrypoint(request.entrypoint)
         ensure_metadata_labels(request.metadata)
         ensure_timeout_within_limit(
             request.timeout,
@@ -791,6 +849,7 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         self._validate_network_exists()
         pvc_inspect_cache = self._validate_volumes(request)
         sandbox_id, created_at, expires_at = self._prepare_creation_context(request)
+        request = self._resolve_requested_entrypoint(request, sandbox_id)
         return self._provision_sandbox(sandbox_id, request, created_at, expires_at, pvc_inspect_cache)
 
     def _async_provision_worker(
@@ -1746,10 +1805,11 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         if resolve_internal:
             container = self._get_container_by_sandbox_id(sandbox_id)
             labels = container.attrs.get("Config", {}).get("Labels") or {}
-            # Sandboxes created with egress sidecar share the sidecar network namespace, so the
-            # main container's private IP is not a stable proxy target. In that case, treat the
-            # server-proxy target as the server-local host-mapped endpoint instead of a container IP.
-            if labels.get(SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY):
+            # For Docker bridge and user-defined networks, proxying through the server-local
+            # host-mapped ports is the most reliable path across host processes and server
+            # containers, especially on Docker Desktop where container bridge IPs are often
+            # unreachable from the lifecycle server process.
+            if self.network_mode != HOST_NETWORK_MODE:
                 return self._resolve_host_mapped_endpoint(
                     self._resolve_proxy_host(),
                     labels,

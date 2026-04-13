@@ -5,6 +5,7 @@ import type {
   RenewExpirationRequest,
   Sandbox,
 } from "../types";
+import { getApiBaseUrlCandidates, saveSettings } from "./storage";
 
 type ApiSettings = any;
 
@@ -45,11 +46,37 @@ async function request<T>(settings: AdminSettings, path: string, options: Reques
   if ((settings?.apiKey ?? "").trim()) {
     headers.set("OPEN-SANDBOX-API-KEY", settings.apiKey.trim());
   }
+  const originalBaseUrl = normalizeBaseUrl(settings?.apiBaseUrl ?? "");
+  const candidateBaseUrls = getApiBaseUrlCandidates(originalBaseUrl);
+  let response: Response | null = null;
+  let lastNetworkError: unknown = null;
+  let resolvedBaseUrl = originalBaseUrl;
 
-  const response = await fetch(`${normalizeBaseUrl(settings?.apiBaseUrl ?? "")}${path}`, {
-    ...options,
-    headers,
-  });
+  for (const baseUrl of candidateBaseUrls) {
+    try {
+      response = await fetch(`${normalizeBaseUrl(baseUrl)}${path}`, {
+        ...options,
+        headers,
+      });
+      resolvedBaseUrl = normalizeBaseUrl(baseUrl);
+      break;
+    } catch (error) {
+      lastNetworkError = error;
+    }
+  }
+
+  if (!response) {
+    throw lastNetworkError instanceof Error
+      ? lastNetworkError
+      : new Error("Failed to fetch lifecycle API.");
+  }
+
+  if (resolvedBaseUrl && resolvedBaseUrl !== originalBaseUrl) {
+    saveSettings({
+      ...settings,
+      apiBaseUrl: resolvedBaseUrl,
+    });
+  }
 
   if (!response.ok) {
     const errorBody = await response.text();
@@ -98,9 +125,13 @@ export function fetchSandbox(settings: AdminSettings, sandboxId: string) {
 }
 
 export function createSandbox(settings: AdminSettings, payload: CreateSandboxRequest) {
+  const body: CreateSandboxRequest = {
+    ...payload,
+    ...(payload.entrypoint && payload.entrypoint.length > 0 ? { entrypoint: payload.entrypoint } : {}),
+  };
   return request<Sandbox>(settings, "/sandboxes", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
 }
 
@@ -164,6 +195,27 @@ export async function runCommand(
     body: JSON.stringify({
       command,
     }),
+  });
+}
+
+export async function runSandboxCommand(
+  settings: ApiSettings,
+  sandboxId: string,
+  payload: {
+    command: string;
+    cwd?: string;
+    timeout?: number;
+    background?: boolean;
+    envs?: Record<string, string>;
+  },
+  port = "44772"
+) {
+  return request(settings, `/sandboxes/${sandboxId}/proxy/${port}/command`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
   });
 }
 

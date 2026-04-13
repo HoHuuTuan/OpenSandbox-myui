@@ -318,6 +318,15 @@ class TestVolume:
 class TestCreateSandboxRequestWithVolumes:
     """Tests for CreateSandboxRequest with volumes field."""
 
+    def test_request_without_entrypoint_is_valid(self):
+        """Request without entrypoint should be valid for runtimes that can inherit image defaults."""
+        request = CreateSandboxRequest(
+            image=ImageSpec(uri="python:3.11"),
+            timeout=3600,
+            resource_limits=ResourceLimits({"cpu": "500m", "memory": "512Mi"}),
+        )
+        assert request.entrypoint is None
+
     def test_request_without_timeout_uses_manual_cleanup(self):
         """Request without timeout should be valid and represent manual cleanup mode."""
         request = CreateSandboxRequest(

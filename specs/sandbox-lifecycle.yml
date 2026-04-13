@@ -583,8 +583,9 @@ components:
           items:
             type: string
           description: |
-            The command to execute as the sandbox's entry process.
-            Always present in responses since entrypoint is required in creation requests.
+            The command the runtime actually launched as the sandbox's entry process.
+            Always present in responses, even when the create request omitted `entrypoint`
+            and the runtime fell back to the image default startup command.
 
         expiresAt:
           type: string
@@ -685,7 +686,7 @@ components:
       additionalProperties: false
     CreateSandboxRequest:
       type: object
-      required: [image, resourceLimits, entrypoint]
+      required: [image, resourceLimits]
       description: |
         Request to create a new sandbox from a container image.
 
@@ -742,10 +743,11 @@ components:
             type: string
           minItems: 1
           description: |
-            The command to execute as the sandbox's entry process (required).
+            Optional command to execute as the sandbox's entry process.
 
             Explicitly specifies the user's expected main process, allowing the sandbox management
             service to reliably inject control processes before executing this command.
+            When omitted, the runtime may fall back to the image's default startup command.
 
             Format: [executable, arg1, arg2, ...]
 

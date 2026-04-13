@@ -14,6 +14,27 @@ type FormState = {
   metadataText: string;
 };
 
+function parseCommandLine(value: string) {
+  const tokens: string[] = [];
+  const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|[^\s]+/g;
+
+  for (const match of value.matchAll(pattern)) {
+    const token = match[1] ?? match[2] ?? match[0];
+    const normalized = token.replace(/\\(["'\\])/g, "$1").trim();
+    if (normalized) {
+      tokens.push(normalized);
+    }
+  }
+
+  return tokens;
+}
+
+function compactRecord(entries: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(entries).filter(([, value]) => value.trim() !== ""),
+  );
+}
+
 function buildFormFromTemplate(templateId: string): FormState {
   const template = getTemplateById(templateId);
   return {
@@ -59,23 +80,23 @@ export function CreateSandboxForm({
       className="panel grid"
       onSubmit={async (event) => {
         event.preventDefault();
+        const entrypoint = parseCommandLine(form.entrypoint.trim());
         const payload: CreateSandboxRequest = {
           image: { uri: form.imageUri.trim() },
           timeout: Number(form.timeout) || 3600,
-          entrypoint: form.entrypoint
-            .split(" ")
-            .map((item) => item.trim())
-            .filter(Boolean),
-          resourceLimits: {
+          resourceLimits: compactRecord({
             cpu: form.cpu.trim(),
             memory: form.memory.trim(),
-          },
+          }),
           env: parseKeyValueText(form.envText),
           metadata: {
             ...parseKeyValueText(form.metadataText),
             template: form.templateId,
           },
         };
+        if (entrypoint.length > 0) {
+          payload.entrypoint = entrypoint;
+        }
         await onSubmit(payload);
       }}
     >

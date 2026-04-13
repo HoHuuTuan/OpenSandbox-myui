@@ -1,38 +1,8 @@
-configs:
-  opensandbox-config:
-    content: |
-      [server]
-      host = "0.0.0.0"
-      port = 8090
-      log_level = "INFO"
-
-      [runtime]
-      type = "docker"
-      # execd_image = "opensandbox/execd:v1.0.9"
-      execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.0.9"
-
-      [egress]
-      image = "opensandbox/egress:v1.0.4"
-      # image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/egress:v1.0.4"
-
-      [docker]
-      network_mode = "bridge"
-      host_ip = "host.docker.internal"
-      drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
-      no_new_privileges = true
-      pids_limit = 4096
-
-      [ingress]
-      mode = "direct"
-
-version: '3.8'
-
 services:
   opensandbox-server:
     image: opensandbox/server:latest
     container_name: opensandbox-server
-    networks:
-      - opensandbox-net
+    network_mode: bridge
     ports:
       - "8090:8090"
     volumes:
@@ -42,16 +12,13 @@ services:
         target: /etc/opensandbox/config.toml
     environment:
       - SANDBOX_CONFIG_PATH=/etc/opensandbox/config.toml
-
   sdk-client:
     image: python:3.11-slim
     container_name: sdk-client
-    networks:
-      - opensandbox-net
     command: >
       sh -c "pip install opensandbox && tail -f /dev/null"
     environment:
-      - OPENSANDBOX_SERVER_URL=http://opensandbox-server:8090
+      - OPENSANDBOX_SERVER_URL=http://host.docker.internal:8090
 
   ai-server:
     build:
@@ -64,6 +31,31 @@ services:
     env_file:
       - ./ai-server/.env
     restart: unless-stopped
+
+configs:
+  opensandbox-config:
+    content: |
+      [server]
+      host = "0.0.0.0"
+      port = 8090
+      log_level = "INFO"
+
+      [runtime]
+      type = "docker"
+      execd_image = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/execd:v1.0.9"
+
+      [egress]
+      image = "opensandbox/egress:v1.0.4"
+
+      [docker]
+      network_mode = "bridge"
+      host_ip = "172.17.0.1"
+      drop_capabilities = ["AUDIT_WRITE", "MKNOD", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+      no_new_privileges = false
+      pids_limit = 4096
+
+      [ingress]
+      mode = "direct"
 
 networks:
   opensandbox-net:

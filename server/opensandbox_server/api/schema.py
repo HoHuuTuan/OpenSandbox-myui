@@ -337,10 +337,13 @@ class CreateSandboxRequest(BaseModel):
         None,
         description="Custom key-value metadata for management, filtering, and tagging",
     )
-    entrypoint: List[str] = Field(
-        ...,
+    entrypoint: Optional[List[str]] = Field(
+        default=None,
         min_length=1,
-        description="The command to execute as the sandbox's entry process",
+        description=(
+            "Optional command to execute as the sandbox's entry process. "
+            "When omitted, runtimes may fall back to the image's default startup command."
+        ),
         example=["python", "/app/main.py"],
     )
     network_policy: Optional[NetworkPolicy] = Field(
@@ -382,7 +385,10 @@ class CreateSandboxResponse(BaseModel):
         description="Timestamp when sandbox will auto-terminate. Null when manual cleanup is enabled.",
     )
     created_at: datetime = Field(..., alias="createdAt", description="Sandbox creation timestamp")
-    entrypoint: List[str] = Field(..., description="Entry process specification from creation request")
+    entrypoint: List[str] = Field(
+        ...,
+        description="Resolved entry process specification returned after request/image-default handling",
+    )
 
     class Config:
         populate_by_name = True
@@ -398,7 +404,10 @@ class Sandbox(BaseModel):
     image: ImageSpec = Field(..., description="Container image specification used to provision this sandbox")
     status: SandboxStatus = Field(..., description="Current lifecycle status and detailed state information")
     metadata: Optional[Dict[str, str]] = Field(None, description="Custom metadata from creation request")
-    entrypoint: List[str] = Field(..., description="The command to execute as the sandbox's entry process")
+    entrypoint: List[str] = Field(
+        ...,
+        description="The resolved command the runtime executed as the sandbox's entry process",
+    )
     expires_at: Optional[datetime] = Field(
         None,
         alias="expiresAt",

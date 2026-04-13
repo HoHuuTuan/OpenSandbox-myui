@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 from opensandbox_server.config import AppConfig, IngressConfig, RuntimeConfig, ServerConfig
@@ -31,6 +32,31 @@ def _build_test_app():
     app = FastAPI()
     config = _app_config_with_api_key()
     app.add_middleware(AuthMiddleware, config=config)
+
+    @app.get("/secured")
+    def secured_endpoint():
+        return {"ok": True}
+
+    return app
+
+
+def _build_cors_test_app():
+    app = FastAPI()
+    config = _app_config_with_api_key()
+    app.add_middleware(AuthMiddleware, config=config)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:8088",
+            "http://127.0.0.1:8088",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ],
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/secured")
     def secured_endpoint():
@@ -131,3 +157,37 @@ def test_auth_middleware_is_proxy_path_accepts_valid_shapes():
     # Non-numeric port must not skip auth (malformed path → 401, not 422)
     assert AuthMiddleware._is_proxy_path("/sandboxes/s1/proxy/not-a-port/x") is False
     assert AuthMiddleware._is_proxy_path("/sandboxes/s1/proxy/8080x/") is False
+
+
+def test_cors_allows_localhost_admin_ui_origin():
+    app = _build_cors_test_app()
+    client = TestClient(app)
+
+    response = client.get(
+        "/secured",
+        headers={
+            "Origin": "http://localhost:8088",
+            "OPEN-SANDBOX-API-KEY": "secret-key",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:8088"
+
+
+def test_cors_preflight_allows_api_key_header_from_localhost_admin_ui():
+    app = _build_cors_test_app()
+    client = TestClient(app)
+
+    response = client.options(
+        "/secured",
+        headers={
+            "Origin": "http://localhost:8088",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "OPEN-SANDBOX-API-KEY",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:8088"
+    assert "OPEN-SANDBOX-API-KEY".lower() in response.headers["access-control-allow-headers"].lower()

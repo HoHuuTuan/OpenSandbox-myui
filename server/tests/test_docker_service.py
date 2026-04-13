@@ -15,9 +15,9 @@
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
-from docker.errors import DockerException, NotFound as DockerNotFound
+from docker.errors import DockerException, ImageNotFound, NotFound as DockerNotFound
 import pytest
 from fastapi import HTTPException, status
 from pydantic import ValidationError
@@ -264,9 +264,20 @@ async def test_create_sandbox_rejects_timeout_above_configured_maximum(mock_dock
 
 @pytest.mark.asyncio
 @patch("opensandbox_server.services.docker.docker")
-async def test_create_sandbox_requires_entrypoint(mock_docker):
+async def test_create_sandbox_uses_image_default_entrypoint_when_omitted(mock_docker):
     mock_client = MagicMock()
     mock_client.containers.list.return_value = []
+    mock_image = MagicMock()
+    mock_image.attrs = {
+        "Config": {
+            "Entrypoint": ["/home/desktop/start-desktop.sh"],
+            "Cmd": [],
+        }
+    }
+    mock_client.images.get.return_value = mock_image
+    mock_client.api.create_host_config.return_value = {}
+    mock_client.api.create_container.return_value = {"Id": "cid"}
+    mock_client.containers.get.return_value = MagicMock()
     mock_docker.from_env.return_value = mock_client
 
     service = DockerSandboxService(config=_app_config())
@@ -277,16 +288,18 @@ async def test_create_sandbox_requires_entrypoint(mock_docker):
         resourceLimits=ResourceLimits(root={}),
         env={},
         metadata={},
-        entrypoint=["python"],
+        entrypoint=None,
     )
-    request.entrypoint = []
 
-    with pytest.raises(HTTPException) as exc:
-        await service.create_sandbox(request)
+    with (
+        patch.object(service, "_prepare_sandbox_runtime"),
+        patch.object(service, "_ensure_image_available"),
+    ):
+        response = await service.create_sandbox(request)
 
-    assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
-    assert exc.value.detail["code"] == SandboxErrorCodes.INVALID_ENTRYPOINT
-    mock_client.containers.create.assert_not_called()
+    assert response.entrypoint == ["/home/desktop/start-desktop.sh"]
+    create_kwargs = mock_client.api.create_container.call_args.kwargs
+    assert create_kwargs["command"] == ["/home/desktop/start-desktop.sh"]
 
 
 @pytest.mark.asyncio
@@ -950,6 +963,39 @@ def test_list_sandboxes_deduplicates_container_and_pending(mock_docker):
     assert len(response.items) == 1
     assert response.items[0].status.state == "Running"
     assert response.items[0].metadata == {"team": "c"}
+
+
+@patch("opensandbox_server.services.docker.docker")
+def test_container_to_sandbox_uses_container_attrs_when_image_metadata_is_missing(mock_docker):
+    container = MagicMock()
+    container.attrs = {
+        "Config": {
+            "Labels": {SANDBOX_ID_LABEL: "sandbox-missing-image"},
+            "Image": "opensandbox/desktop:latest",
+            "Cmd": ["/home/desktop/start-desktop.sh"],
+        },
+        "Image": "sha256:missing-image-ref",
+        "Created": "2025-01-01T00:00:00Z",
+        "State": {
+            "Status": "running",
+            "Running": True,
+            "FinishedAt": "0001-01-01T00:00:00Z",
+            "ExitCode": 0,
+        },
+    }
+    type(container).status = PropertyMock(return_value="running")
+    type(container).image = PropertyMock(side_effect=ImageNotFound("missing"))
+
+    mock_client = MagicMock()
+    mock_client.containers.list.return_value = []
+    mock_docker.from_env.return_value = mock_client
+
+    service = DockerSandboxService(config=_app_config())
+
+    sandbox = service._container_to_sandbox(container, "sandbox-missing-image")
+
+    assert sandbox.image.uri == "opensandbox/desktop:latest"
+    assert sandbox.entrypoint == ["/home/desktop/start-desktop.sh"]
 
 
 @patch("opensandbox_server.services.docker.docker")

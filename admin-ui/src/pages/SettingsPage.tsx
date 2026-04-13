@@ -12,7 +12,7 @@ export function SettingsPage() {
       <PageHeader
         eyebrow="Configuration"
         title="Cài đặt API"
-        subtitle="Khai báo base URL đúng của lifecycle API. Mặc định chuẩn là http://127.0.0.1:8080/v1."
+        subtitle="Khai báo base URL đúng của lifecycle API. Mặc định chuẩn là http://127.0.0.1:8090/v1."
       />
       <form
         className="panel settings-form"

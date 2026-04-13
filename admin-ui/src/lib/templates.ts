@@ -19,6 +19,9 @@ export type SandboxTemplate = {
   metadataText: string;
   ports: PortPreset[];
   bootstrapCommand?: string;
+  restartCommand?: string;
+  verifyCommand?: string;
+  openBrowserCommand?: string;
   recipe: string[];
 };
 
@@ -67,27 +70,30 @@ export const sandboxTemplates: SandboxTemplate[] = [
   },
   {
     id: "desktop-agent",
-    name: "Desktop Agent",
+    name: "Desktop Dev Sandbox",
     category: "desktop",
-    description: "Desktop đầy đủ với VNC/noVNC để test GUI agent hoặc quan sát thao tác trực tiếp.",
+    description: "Desktop dev sẵn sàng cho noVNC, browser testing và agent quan sát GUI mà không cần bootstrap tay mỗi lần.",
     imageUri: "opensandbox/desktop:latest",
     timeout: "3600",
     entrypoint: "/home/desktop/start-desktop.sh",
-    cpu: "1000m",
-    memory: "2Gi",
-    envText: "PYTHON_VERSION=3.11\nVNC_PASSWORD=opensandbox",
-    metadataText: "template=desktop-agent\nproject=agent-lab",
+    cpu: "2000m",
+    memory: "4Gi",
+    envText: "DISPLAY=:1\nVNC_PASSWORD=opensandbox\nVNC_PORT=5900\nNOVNC_PORT=6080\nDESKTOP_RESOLUTION=1440x900x24\nBROWSER=/usr/local/bin/chromium-browser\nSTART_URL=https://example.com",
+    metadataText: "template=desktop-agent\nproject=agent-lab\nworkload=desktop-dev\nsurface=novnc\nbrowser=chromium",
     ports: [
       { port: "44772", label: "execd", kind: "execd" },
       { port: "5900", label: "VNC", kind: "vnc" },
       { port: "6080", label: "noVNC", kind: "novnc", path: "/vnc.html" },
     ],
-    bootstrapCommand:
-      "Xvfb :0 -screen 0 1280x800x24 & DISPLAY=:0 dbus-launch startxfce4 & x11vnc -display :0 -passwd \"$VNC_PASSWORD\" -forever -shared -rfbport 5900 & /usr/bin/websockify --web=/usr/share/novnc 6080 localhost:5900",
+    bootstrapCommand: "/home/desktop/start-desktop.sh",
+    restartCommand: "/home/desktop/start-desktop.sh",
+    verifyCommand:
+      "sh -lc 'curl -fsS http://127.0.0.1:44772/ping >/dev/null && (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -q \":5900 \" && (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -q \":6080 \" && echo \"desktop-ready\"'",
+    openBrowserCommand: "desktop-open-url \"${START_URL:-https://example.com}\"",
     recipe: [
-      "Khởi động desktop stack bằng bootstrap command.",
-      "Mở noVNC trực tiếp trong UI để quan sát agent.",
-      "Dùng execd shell để cài thêm app hoặc tooling nếu cần.",
+      "Sandbox tự khởi động desktop stack ngay từ entrypoint nên noVNC sẵn sàng nhanh hơn và ít phụ thuộc lệnh tay.",
+      "Chromium được bake sẵn, không dính snap, và có helper `desktop-open-url` để mở web nhanh trong desktop.",
+      "Nếu desktop bị treo hoặc chưa lên hẳn, dùng các nút Bootstrap/Restart/Verify ngay trong trang chi tiết.",
     ],
   },
   {

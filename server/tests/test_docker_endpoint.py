@@ -163,15 +163,45 @@ def test_get_endpoint_bridge_internal_resolution(mock_docker_service):
     service.app_config.docker.network_mode = "bridge"
     service.network_mode = "bridge"
 
+    labels = {
+        "opensandbox.io/embedding-proxy-port": "50002",
+        "opensandbox.io/http-port": "50001",
+    }
     mock_container = MagicMock()
     mock_container.attrs = {
         "State": {"Running": True},
+        "Config": {"Labels": labels},
         "NetworkSettings": {"IPAddress": "10.0.0.5"},
     }
     mock_client.containers.list.return_value = [mock_container]
 
     endpoint = service.get_endpoint("sbx-123", 8080, resolve_internal=True)
-    assert endpoint.endpoint == "10.0.0.5:8080"
+    assert endpoint.endpoint == "127.0.0.1:50001"
+
+
+def test_get_endpoint_bridge_internal_resolution_uses_host_mapped_proxy_when_server_runs_in_docker(
+    mock_docker_service,
+):
+    service, mock_client = mock_docker_service
+    service.app_config.docker.network_mode = "bridge"
+    service.network_mode = "bridge"
+
+    labels = {
+        "opensandbox.io/embedding-proxy-port": "50002",
+        "opensandbox.io/http-port": "50001",
+    }
+    mock_container = MagicMock()
+    mock_container.attrs = {
+        "State": {"Running": True},
+        "Config": {"Labels": labels},
+        "NetworkSettings": {"IPAddress": "10.0.0.5"},
+    }
+    mock_client.containers.list.return_value = [mock_container]
+
+    with patch("opensandbox_server.services.docker._running_inside_docker_container", return_value=True):
+        endpoint = service.get_endpoint("sbx-123", 8080, resolve_internal=True)
+
+    assert endpoint.endpoint == "127.0.0.1:50001"
 
 
 def test_get_endpoint_bridge_internal_resolution_with_egress_sidecar_falls_back_to_host_mapped_endpoint(
@@ -317,14 +347,19 @@ def test_get_endpoint_user_defined_network_external(mock_docker_service):
 
 
 def test_get_endpoint_user_defined_network_internal_prefers_configured_network(mock_docker_service):
-    """resolve_internal=True on a user-defined network returns the IP from that specific network."""
+    """resolve_internal=True on host uses server-local host mappings for user-defined networks."""
     service, mock_client = mock_docker_service
     service.app_config.docker.network_mode = "my-app-net"
     service.network_mode = "my-app-net"
 
+    labels = {
+        "opensandbox.io/embedding-proxy-port": "51000",
+        "opensandbox.io/http-port": "51001",
+    }
     mock_container = MagicMock()
     mock_container.attrs = {
         "State": {"Running": True},
+        "Config": {"Labels": labels},
         "NetworkSettings": {
             # top-level IPAddress is empty for user-defined networks
             "IPAddress": "",
@@ -338,8 +373,39 @@ def test_get_endpoint_user_defined_network_internal_prefers_configured_network(m
 
     endpoint = service.get_endpoint("sbx-123", 8080, resolve_internal=True)
 
-    # Must use the IP from the configured network, not the default bridge entry
-    assert endpoint.endpoint == "192.168.100.5:8080"
+    assert endpoint.endpoint == "127.0.0.1:51001"
+
+
+def test_get_endpoint_user_defined_network_internal_uses_host_mapped_proxy_when_server_runs_in_docker(
+    mock_docker_service,
+):
+    """resolve_internal=True inside Docker still uses the server-local host-mapped endpoint."""
+    service, mock_client = mock_docker_service
+    service.app_config.docker.network_mode = "my-app-net"
+    service.network_mode = "my-app-net"
+
+    labels = {
+        "opensandbox.io/embedding-proxy-port": "51000",
+        "opensandbox.io/http-port": "51001",
+    }
+    mock_container = MagicMock()
+    mock_container.attrs = {
+        "State": {"Running": True},
+        "Config": {"Labels": labels},
+        "NetworkSettings": {
+            "IPAddress": "",
+            "Networks": {
+                "bridge": {"IPAddress": "172.17.0.3"},
+                "my-app-net": {"IPAddress": "192.168.100.5"},
+            },
+        },
+    }
+    mock_client.containers.list.return_value = [mock_container]
+
+    with patch("opensandbox_server.services.docker._running_inside_docker_container", return_value=True):
+        endpoint = service.get_endpoint("sbx-123", 8080, resolve_internal=True)
+
+    assert endpoint.endpoint == "127.0.0.1:51001"
 
 
 def test_extract_bridge_ip_falls_back_when_named_network_ip_missing(mock_docker_service):

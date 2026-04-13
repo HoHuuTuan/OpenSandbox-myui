@@ -271,6 +271,17 @@ class KubernetesSandboxService(K8sDiagnosticsMixin, SandboxService, ExtensionSer
             HTTPException: If creation fails, timeout, or invalid parameters
         """
         # Validate request
+        if not request.entrypoint:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": SandboxErrorCodes.INVALID_ENTRYPOINT,
+                    "message": (
+                        "Entrypoint is required for the Kubernetes runtime. "
+                        "Omit entrypoint only when using a Docker-backed sandbox that can inherit the image default command."
+                    ),
+                },
+            )
         ensure_entrypoint(request.entrypoint)
         ensure_metadata_labels(request.metadata)
         ensure_timeout_within_limit(

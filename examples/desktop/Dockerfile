@@ -14,14 +14,11 @@
 
 FROM ubuntu:22.04
 
-# Default to English; install locale support first, then other deps
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
     LANGUAGE=en_US:en
 
-#----------------------
-# Install locales first, then remaining dependencies
 RUN apt-get update \
     && apt-get install -y locales \
     && locale-gen en_US.UTF-8 \
@@ -40,28 +37,49 @@ RUN apt-get update \
         fonts-dejavu-core \
         net-tools \
         ca-certificates \
+        iputils-ping \
+        curl \
+        wget \
+        git \
+        sudo \
+        unzip \
+        xdg-utils \
+        libgtk-3-0 \
+        libnss3 \
+        libasound2 \
+        libxss1 \
+        libxtst6 \
+        libx11-xcb1 \
+        libxcb-dri3-0 \
+        libgbm1 \
         --no-install-recommends \
     && sed -i 's/DEFAULT_LOCALE = null;/DEFAULT_LOCALE = "en";/' /usr/share/novnc/app/localization.js \
     && rm -rf /var/lib/apt/lists/*
 
-# Precreate X11 stuff
-RUN mkdir -p /tmp/.X11-unix
-RUN chmod 1777 /tmp/.X11-unix
+RUN mkdir -p /tmp/.X11-unix /dev/shm \
+    && chmod 1777 /tmp/.X11-unix /dev/shm
 
-#----------------------
-# Create a non-root user
 RUN groupadd -r desktop && useradd -r -g desktop -G audio,video desktop \
-    && mkdir -p /home/desktop && chown -R desktop:desktop /home/desktop
+    && mkdir -p /home/desktop \
+    && chown -R desktop:desktop /home/desktop
 
-#----------------------
-# Configure user, etc
+RUN wget "https://download-chromium.appspot.com/dl/Linux_x64?type=snapshots" -O chromium.zip \
+    && unzip chromium.zip \
+    && mv chrome-linux /opt/chromium \
+    && rm chromium.zip
+
+RUN ln -s /opt/chromium/chrome /usr/local/bin/chromium \
+    && printf '#!/usr/bin/env bash\nexport DISPLAY=${DISPLAY:-:1}\nmkdir -p /tmp/chromium-profile\nexec /opt/chromium/chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --user-data-dir=/tmp/chromium-profile \"$@\"\n' > /usr/local/bin/chromium-browser \
+    && printf '#!/usr/bin/env bash\nset -euo pipefail\nexport DISPLAY=\"${DISPLAY:-:1}\"\nurl=\"${1:-${START_URL:-https://example.com}}\"\nmkdir -p /tmp/chromium-profile\nsetsid /usr/local/bin/chromium-browser \"$url\" >/tmp/chromium-browser.log 2>&1 < /dev/null &\n' > /usr/local/bin/desktop-open-url \
+    && ln -sf /usr/local/bin/chromium-browser /usr/local/bin/x-www-browser \
+    && chmod +x /usr/local/bin/chromium-browser /usr/local/bin/desktop-open-url
 
 WORKDIR /home/desktop
 
 COPY --chown=desktop:desktop start-desktop.sh /home/desktop/start-desktop.sh
 RUN chmod +x /home/desktop/start-desktop.sh
 
-USER desktop
-EXPOSE 5900 6080
+USER root
+EXPOSE 44772 5900 6080
 
 CMD ["/home/desktop/start-desktop.sh"]

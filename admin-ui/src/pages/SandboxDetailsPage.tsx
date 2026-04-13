@@ -1,13 +1,19 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import ExecutionPanel from "../components/ExecutionPanel";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingBlock } from "../components/LoadingBlock";
 import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
+import { useSettings } from "../context/settings";
 import { formatDate, formatRelativeFromNow } from "../lib/format";
+import { fetchSandboxEndpoint, proxyPing, runSandboxCommand } from "../lib/api";
 import { getTemplateById } from "../lib/templates";
 import { useSandboxDetails } from "./hooks";
+
+function prefersServerProxy(kind: "execd" | "web" | "novnc" | "vnc" | "devtools") {
+  return kind !== "vnc";
+}
 
 function buildSurfaceUrl(
   endpointValue: string,
@@ -16,18 +22,33 @@ function buildSurfaceUrl(
 ) {
   const endpoint = endpointValue.trim().replace(/^https?:\/\//, "");
   if (!endpoint) return "";
+  const baseUrl = new URL(`http://${endpoint}`);
 
   if (kind === "novnc") {
-    const [hostPort, ...rest] = endpoint.split("/");
-    const [host, port] = hostPort.split(":");
-    const proxyPath = rest.join("/");
-    const noVncPath = (path ?? "/vnc.html").replace(/^\//, "");
-    return `http://${hostPort}/${noVncPath}?host=${host}&port=${port}&path=${proxyPath}`;
+    const noVncPath = (path ?? "/vnc.html").replace(/^\/+/, "");
+    const proxyPath = baseUrl.pathname.replace(/\/$/, "");
+    const pageUrl = new URL(`${proxyPath}/${noVncPath}`.replace(/\/{2,}/g, "/"), `${baseUrl.protocol}//${baseUrl.host}`);
+
+    pageUrl.searchParams.set("autoconnect", "true");
+    pageUrl.searchParams.set("reconnect", "true");
+    pageUrl.searchParams.set("resize", "scale");
+    pageUrl.searchParams.set("host", baseUrl.hostname);
+    if (baseUrl.port) {
+      pageUrl.searchParams.set("port", baseUrl.port);
+    }
+    if (proxyPath) {
+      pageUrl.searchParams.set("path", `${proxyPath.replace(/^\/+/, "")}/websockify`);
+    }
+
+    return pageUrl.toString();
   }
 
   if (kind === "web" || kind === "devtools") {
-    const suffix = path ?? "";
-    return `http://${endpoint}${suffix}`;
+    const suffix = (path ?? "").replace(/^\/+/, "");
+    const joinedPath = suffix
+      ? `${baseUrl.pathname.replace(/\/$/, "")}/${suffix}`.replace(/\/{2,}/g, "/")
+      : baseUrl.pathname;
+    return new URL(joinedPath, `${baseUrl.protocol}//${baseUrl.host}`).toString();
   }
 
   return endpoint;
@@ -36,11 +57,13 @@ function buildSurfaceUrl(
 export function SandboxDetailsPage() {
   const { sandboxId = "" } = useParams();
   const navigate = useNavigate();
+  const { settings } = useSettings();
   const [endpointPort, setEndpointPort] = useState("44772");
   const [renewValue, setRenewValue] = useState("");
   const [useServerProxy, setUseServerProxy] = useState(true);
   const [actionError, setActionError] = useState("");
   const [busyAction, setBusyAction] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
   const { sandbox, endpoint, loading, error, refresh, pause, resume, remove, renewExpiration } = useSandboxDetails(
     sandboxId,
     endpointPort,
@@ -54,6 +77,96 @@ export function SandboxDetailsPage() {
 
   const activePortPreset = template.ports.find((port) => port.port === endpointPort) ?? template.ports[0];
   const surfaceUrl = endpoint ? buildSurfaceUrl(endpoint.endpoint, activePortPreset?.kind ?? "execd", activePortPreset?.path) : "";
+  const isDesktopTemplate = template.id === "desktop-agent";
+
+  useEffect(() => {
+    const matchingPreset = template.ports.find((port) => port.port === endpointPort);
+    if (matchingPreset) {
+      setUseServerProxy(prefersServerProxy(matchingPreset.kind));
+    }
+  }, [endpointPort, template.ports]);
+
+  async function runDesktopAction(actionKey: string, command: string, successMessage: string) {
+    if (!sandboxId) return;
+    setBusyAction(actionKey);
+    setActionError("");
+    setActionNotice("");
+    try {
+      await runSandboxCommand(
+        settings,
+        sandboxId,
+        {
+          command,
+          background: actionKey !== "verify-desktop",
+          timeout: 60000,
+        },
+        "44772",
+      );
+      setActionNotice(successMessage);
+      refresh();
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : "Desktop action failed.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function openSurface(port: string) {
+    if (!sandboxId) return;
+    const preset = template.ports.find((item) => item.port === port);
+    if (!preset) return;
+
+    setBusyAction(`open-${port}`);
+    setActionError("");
+    setActionNotice("");
+
+    try {
+      const nextEndpoint = await fetchSandboxEndpoint(
+        settings,
+        sandboxId,
+        port,
+        prefersServerProxy(preset.kind),
+      );
+      const nextUrl = buildSurfaceUrl(nextEndpoint.endpoint, preset.kind, preset.path);
+      if (!nextUrl) {
+        throw new Error("Surface URL is empty.");
+      }
+      setEndpointPort(port);
+      setUseServerProxy(prefersServerProxy(preset.kind));
+      window.open(nextUrl, "_blank", "noopener,noreferrer");
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : "Không mở được surface.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function verifyExecd() {
+    if (!sandboxId) return;
+    setBusyAction("verify-execd");
+    setActionError("");
+    setActionNotice("");
+    try {
+      await proxyPing(settings, sandboxId, "44772");
+      if (template.verifyCommand) {
+        await runSandboxCommand(
+          settings,
+          sandboxId,
+          {
+            command: template.verifyCommand,
+            background: false,
+            timeout: 30000,
+          },
+          "44772",
+        );
+      }
+      setActionNotice("execd phản hồi bình thường và desktop surfaces chính đã qua kiểm tra nhanh.");
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : "execd verification thất bại.");
+    } finally {
+      setBusyAction("");
+    }
+  }
 
   if (loading) return <LoadingBlock />;
   if (error || !sandbox) {
@@ -133,6 +246,7 @@ export function SandboxDetailsPage() {
       />
 
       {actionError ? <div className="error-banner">{actionError}</div> : null}
+      {actionNotice ? <div className="panel subtle-panel">{actionNotice}</div> : null}
 
       <section className="panel detail-grid">
         <div>
@@ -190,6 +304,61 @@ export function SandboxDetailsPage() {
         </div>
       </section>
 
+      {isDesktopTemplate ? (
+        <section className="panel">
+          <div className="panel-header">
+            <h3>Desktop Actions</h3>
+          </div>
+          <div className="page-actions">
+            <button
+              className="button"
+              disabled={busyAction === "open-6080"}
+              onClick={() => void openSurface("6080")}
+              type="button"
+            >
+              Open noVNC
+            </button>
+            <button
+              className="ghost-button"
+              disabled={!template.bootstrapCommand || busyAction === "bootstrap-desktop"}
+              onClick={() => template.bootstrapCommand && void runDesktopAction("bootstrap-desktop", template.bootstrapCommand, "Desktop bootstrap command đã được gửi qua execd.")}
+              type="button"
+            >
+              Bootstrap Desktop
+            </button>
+            <button
+              className="ghost-button"
+              disabled={!template.restartCommand || busyAction === "restart-desktop"}
+              onClick={() => template.restartCommand && void runDesktopAction("restart-desktop", template.restartCommand, "Desktop stack đang được restart.")}
+              type="button"
+            >
+              Restart Desktop
+            </button>
+            <button
+              className="ghost-button"
+              disabled={busyAction === "verify-execd"}
+              onClick={() => void verifyExecd()}
+              type="button"
+            >
+              Verify execd
+            </button>
+            {template.openBrowserCommand ? (
+              <button
+                className="ghost-button"
+                disabled={busyAction === "open-browser"}
+                onClick={() => void runDesktopAction("open-browser", template.openBrowserCommand!, "Chromium launch command đã được gửi vào desktop sandbox.")}
+                type="button"
+              >
+                Open Browser
+              </button>
+            ) : null}
+          </div>
+          <div className="helper-text">
+            Desktop dev sandboxes tự khởi động từ image entrypoint. Các nút này là đường phục hồi nhanh khi cần bật lại desktop stack hoặc mở browser bên trong sandbox.
+          </div>
+        </section>
+      ) : null}
+
       <section className="panel">
         <div className="panel-header">
           <h3>Ports và Surfaces</h3>
@@ -201,9 +370,25 @@ export function SandboxDetailsPage() {
               <h4>{port.label}</h4>
               <p>Port {port.port} bên trong sandbox</p>
               <div className="surface-actions">
-                <button className="button secondary" type="button" onClick={() => setEndpointPort(port.port)}>
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() => {
+                    setEndpointPort(port.port);
+                    setUseServerProxy(prefersServerProxy(port.kind));
+                  }}
+                >
                   Resolve
                 </button>
+                {["web", "novnc", "devtools"].includes(port.kind) ? (
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    onClick={() => void openSurface(port.port)}
+                  >
+                    Open
+                  </button>
+                ) : null}
               </div>
             </article>
           ))}
