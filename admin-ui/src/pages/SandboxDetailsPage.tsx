@@ -11,8 +11,10 @@ import { fetchSandboxEndpoint, proxyPing, runSandboxCommand } from "../lib/api";
 import { getTemplateById } from "../lib/templates";
 import { useSandboxDetails } from "./hooks";
 
+void proxyPing;
+
 function prefersServerProxy(kind: "execd" | "web" | "novnc" | "vnc" | "devtools") {
-  return kind !== "vnc";
+  return kind !== "web";
 }
 
 function buildSurfaceUrl(
@@ -54,6 +56,24 @@ function buildSurfaceUrl(
   return endpoint;
 }
 
+async function verifyExecd(endpoint?: string) {
+  if (!endpoint) {
+    alert("Chưa có endpoint");
+    return;
+  }
+
+  try {
+    const res = await fetch(endpoint + "/ping");
+    if (res.ok) {
+      alert("execd OK");
+    } else {
+      alert("execd lỗi");
+    }
+  } catch {
+    alert("Không kết nối được execd");
+  }
+}
+
 export function SandboxDetailsPage() {
   const { sandboxId = "" } = useParams();
   const navigate = useNavigate();
@@ -76,7 +96,20 @@ export function SandboxDetailsPage() {
   }, [sandbox?.metadata]);
 
   const activePortPreset = template.ports.find((port) => port.port === endpointPort) ?? template.ports[0];
-  const surfaceUrl = endpoint ? buildSurfaceUrl(endpoint.endpoint, activePortPreset?.kind ?? "execd", activePortPreset?.path) : "";
+  let surfaceUrl = "";
+
+  if (endpoint && activePortPreset) {
+    if (activePortPreset.kind === "web") {
+      const hostPort = endpoint.endpoint.split(":").pop();
+      surfaceUrl = `http://127.0.0.1:${hostPort}`;
+    } else {
+      surfaceUrl = buildSurfaceUrl(
+        endpoint.endpoint,
+        activePortPreset.kind,
+        activePortPreset.path
+      );
+    }
+  }
   const isDesktopTemplate = template.id === "desktop-agent";
 
   useEffect(() => {
@@ -113,6 +146,7 @@ export function SandboxDetailsPage() {
 
   async function openSurface(port: string) {
     if (!sandboxId) return;
+
     const preset = template.ports.find((item) => item.port === port);
     if (!preset) return;
 
@@ -121,48 +155,40 @@ export function SandboxDetailsPage() {
     setActionNotice("");
 
     try {
-      const nextEndpoint = await fetchSandboxEndpoint(
+      const res = await fetchSandboxEndpoint(
         settings,
         sandboxId,
         port,
-        prefersServerProxy(preset.kind),
+        preset.kind !== "web"
       );
-      const nextUrl = buildSurfaceUrl(nextEndpoint.endpoint, preset.kind, preset.path);
-      if (!nextUrl) {
+
+      const endpointValue = res.endpoint;
+
+      if (!endpointValue) {
         throw new Error("Surface URL is empty.");
       }
-      setEndpointPort(port);
-      setUseServerProxy(prefersServerProxy(preset.kind));
-      window.open(nextUrl, "_blank", "noopener,noreferrer");
-    } catch (nextError) {
-      setActionError(nextError instanceof Error ? nextError.message : "Không mở được surface.");
-    } finally {
-      setBusyAction("");
-    }
-  }
 
-  async function verifyExecd() {
-    if (!sandboxId) return;
-    setBusyAction("verify-execd");
-    setActionError("");
-    setActionNotice("");
-    try {
-      await proxyPing(settings, sandboxId, "44772");
-      if (template.verifyCommand) {
-        await runSandboxCommand(
-          settings,
-          sandboxId,
-          {
-            command: template.verifyCommand,
-            background: false,
-            timeout: 30000,
-          },
-          "44772",
+      let finalUrl = "";
+
+      if (preset.kind === "web") {
+        const hostPort = endpointValue.split(":").pop();
+        finalUrl = `http://127.0.0.1:${hostPort}`;
+      } else {
+        finalUrl = buildSurfaceUrl(
+          endpointValue,
+          preset.kind,
+          preset.path
         );
       }
-      setActionNotice("execd phản hồi bình thường và desktop surfaces chính đã qua kiểm tra nhanh.");
-    } catch (nextError) {
-      setActionError(nextError instanceof Error ? nextError.message : "execd verification thất bại.");
+
+      setEndpointPort(port);
+      setUseServerProxy(preset.kind !== "web");
+
+      window.open(finalUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : "Không mở được surface."
+      );
     } finally {
       setBusyAction("");
     }
@@ -337,7 +363,7 @@ export function SandboxDetailsPage() {
             <button
               className="ghost-button"
               disabled={busyAction === "verify-execd"}
-              onClick={() => void verifyExecd()}
+              onClick={() => verifyExecd(endpoint?.endpoint)}
               type="button"
             >
               Verify execd

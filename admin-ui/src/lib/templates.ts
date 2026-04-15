@@ -143,6 +143,47 @@ export const sandboxTemplates: SandboxTemplate[] = [
     ],
   },
   {
+    id: "openclaw-agent",
+    name: "OpenClaw Agent",
+    category: "agent",
+    description: "Chạy OpenClaw gateway để test agent + browser control",
+    imageUri: "openclaw-local:latest",
+    timeout: "3600",
+
+   entrypoint: "sh -lc \"mkdir -p /home/node/.openclaw && printf '%s' '{\\\"gateway\\\":{\\\"mode\\\":\\\"local\\\",\\\"auth\\\":{\\\"token\\\":\\\"123456\\\"},\\\"controlUi\\\":{\\\"allowedOrigins\\\":[\\\"*\\\"]}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080\"",
+    cpu: "1000m",
+    memory: "2Gi",
+
+    envText: `
+  OPENCLAW_GATEWAY_PORT=8080
+  `.trim(),
+
+    metadataText: `
+  template=openclaw-agent
+  project=agent-lab
+  `.trim(),
+
+    ports: [
+      { port: "44772", label: "execd", kind: "execd" },
+      { port: "8080", label: "Web UI", kind: "web" },
+    ],
+
+    bootstrapCommand:
+      "node openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080",
+
+    restartCommand:
+      "sh -lc 'pkill -f \"openclaw.mjs gateway\" || true; node openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080'",
+
+    verifyCommand:
+      "node -e \"fetch('http://127.0.0.1:8080/healthz').then(r=>{if(!r.ok)process.exit(1); console.log('openclaw-ready')}).catch(()=>process.exit(1))\"",
+
+    recipe: [
+      "Tạo sandbox chạy OpenClaw gateway",
+      "Bấm Open để vào UI qua proxy của OpenSandbox",
+      "Token mặc định là 123456",
+    ],
+  },
+  {
     id: "custom",
     name: "Custom",
     category: "custom",

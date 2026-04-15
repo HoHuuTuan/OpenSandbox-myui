@@ -49,7 +49,7 @@ configs:
 
       [docker]
       network_mode = "bridge"
-      host_ip = "172.17.0.1"
+      host_ip = "host.docker.internal"
       drop_capabilities = ["AUDIT_WRITE", "MKNOD", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
       no_new_privileges = false
       pids_limit = 4096
