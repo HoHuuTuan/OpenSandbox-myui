@@ -53,6 +53,16 @@ export interface AdminSettings {
   autoRefreshSeconds: number;
 }
 
+export interface NetworkRule {
+  action: "allow" | "deny";
+  target: string;
+}
+
+export interface NetworkPolicy {
+  defaultAction?: "allow" | "deny";
+  egress?: NetworkRule[];
+}
+
 export interface CreateSandboxRequest {
   image: {
     uri: string;
@@ -62,6 +72,7 @@ export interface CreateSandboxRequest {
   entrypoint?: string[];
   env?: Record<string, string>;
   metadata?: Record<string, string>;
+  networkPolicy?: NetworkPolicy;
 }
 
 export interface RenewExpirationRequest {

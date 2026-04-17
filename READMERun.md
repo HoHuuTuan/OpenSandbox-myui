@@ -1,20 +1,72 @@
-*VPS
-- Run VPS
-  + B1: mở cmd 
-  + B2: Đăng nhập -> ssh root@IP_VPS
-  + B3: Nhập mật khẩu 
+# Local Runbook
 
-- Kiểm tra conect git: ssh -T git@github.com 
-- clone dự án: git clone git@github.com:user_name/ten_project.git -> VD: git clone git@github.com:HoHuuTuan/OpenSandbox-myui.git
-- MK khi kiểm tra conect và git về: tuan1234
-- Kiểm tra docker container: docker ps
-- Kiểm tra docker images: docker images
+## 1. Start Docker
 
-- Run OpenSandbox UI
- + B1: cd server 
- + B2: run server (Chạy backend) -> docker compose up --build
- + B2: cd admin-ui 
- + B3; Build UI-> docker build -t opensandbox-admin-ui:latest .
- + B4: run UI (Chạy UI) -> docker run -d --name opensandbox-admin-ui -p 8088:80 --restart unless-stopped opensandbox-admin-ui:latest
+Make sure Docker Desktop or Docker Engine is running first.
 
-*Lưu ý khi UI đang chạy mà build UI lại thì nhớ xóa container UI -> docker rm -f opensandbox-admin-ui rồi mới run UI lại.
+Useful checks:
+
+```powershell
+docker version
+docker ps
+docker images
+```
+
+## 2. Build the broker-first OpenClaw image
+
+```powershell
+docker build -t opensandbox/openclaw-broker:latest sandboxes/openclaw-broker
+```
+
+## 3. Start the backend stack
+
+```powershell
+cd server
+docker compose up --build
+```
+
+This starts:
+
+- `opensandbox-server` on `http://127.0.0.1:8090`
+- `ai-server` on `http://127.0.0.1:3001`
+- `data-broker` on `http://127.0.0.1:3302`
+- `mock-source` on the internal compose network
+
+## 4. Start the admin UI
+
+Development mode:
+
+```powershell
+cd admin-ui
+npm install
+npm run dev
+```
+
+Docker mode:
+
+```powershell
+cd admin-ui
+docker build -t opensandbox-admin-ui:latest .
+docker run -d --name opensandbox-admin-ui -p 8088:80 --restart unless-stopped opensandbox-admin-ui:latest
+```
+
+If an old UI container already exists, remove it before rerunning:
+
+```powershell
+docker rm -f opensandbox-admin-ui
+```
+
+## 5. Launch OpenClaw end-to-end
+
+Option A: use the `OpenClaw Agent` template in the admin UI.
+
+Option B: run the SDK example:
+
+```powershell
+uv pip install opensandbox requests
+uv run python examples/openclaw/main.py
+```
+
+Default local flow:
+
+`OpenClaw sandbox -> Data Broker -> mock/private source`

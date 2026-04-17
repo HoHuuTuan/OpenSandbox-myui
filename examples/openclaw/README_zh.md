@@ -1,72 +1,112 @@
-# OpenClaw Gateway 示例
+# OpenClaw Broker-First 示例
 
-在 OpenSandbox 沙箱实例中启动 [OpenClaw](https://github.com/openclaw/openclaw) Gateway，并暴露 HTTP 访问端点。脚本会轮询 Gateway，直到返回 HTTP 200，然后打印可访问地址。
+这个示例把 OpenClaw 运行在 OpenSandbox 中，并强制采用下面的标准数据链路：
 
-## 启动 OpenSandbox Server（本地）
+`OpenClaw 沙箱 -> Data Broker -> 私有数据源`
 
-最新 OpenClaw 镜像可在这里查看：[OpenClaw Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw)。
+沙箱本身不直接拿数据库凭证，也不直连原始数据源。Data Broker 使用自己的上游凭证读取数据，然后只返回过滤、格式化、脱敏后的结果。
 
-### 注意事项（Docker 运行时要求）
+## 本地端到端运行
 
-默认情况下，OpenSandbox Server 使用 `runtime.type = "docker"`，因此 **必须** 能访问可用的 Docker daemon。
-
-- **Docker Desktop**：确保已启动，然后执行 `docker version` 验证。
-- **Colima（macOS）**：先启动 (`colima start`)，再在启动 server 前导出 socket：
+### 1. 构建 broker-first OpenClaw 镜像
 
 ```shell
-export DOCKER_HOST="unix://${HOME}/.colima/default/docker.sock"
+docker build -t opensandbox/openclaw-broker:latest sandboxes/openclaw-broker
 ```
 
-预拉取 OpenClaw 镜像：
+### 2. 启动 OpenSandbox、mock source 和 Data Broker
 
 ```shell
-docker pull ghcr.io/openclaw/openclaw:latest
+cd server
+docker compose up --build
 ```
 
-启动 OpenSandbox Server（日志会持续输出在当前终端）：
+这套 compose 会启动：
 
-```shell
-uv pip install opensandbox-server
-opensandbox-server init-config ~/.sandbox.toml --example docker
-opensandbox-server
-```
+- `opensandbox-server`，地址 `http://localhost:8090`
+- `mock-source`，仅在 compose 内网可见
+- `data-broker`，地址 `http://localhost:3302`
 
-如果出现 `docker/transport/unixconn.py` 的 `FileNotFoundError: [Errno 2] No such file or directory`，通常表示 Docker unix socket 不存在或 Docker 未启动。
-
-## 创建并访问 OpenClaw Sandbox
-
-该示例为快速体验预置了以下参数：
-
-- OpenSandbox Server：`http://localhost:8080`
-- 镜像：`ghcr.io/openclaw/openclaw:latest`
-- Gateway 端口：`18789`
-- 超时时间：`3600s`
-- Token：`OPENCLAW_GATEWAY_TOKEN`（默认：`dummy-token-for-sandbox`）
-
-在项目根目录安装依赖：
+### 3. 安装 Python 依赖
 
 ```shell
 uv pip install opensandbox requests
 ```
 
-运行示例（如需鉴权访问请设置真实 token）：
+### 4. 运行示例
 
 ```shell
-export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
 uv run python examples/openclaw/main.py
 ```
 
-预期输出类似：
+预期输出：
 
 ```text
-Creating openclaw sandbox with image=ghcr.io/openclaw/openclaw:latest on OpenSandbox server http://localhost:8080...
+Creating broker-first OpenClaw sandbox with image=opensandbox/openclaw-broker:latest on http://localhost:8090...
 [check] sandbox ready after 7.1s
-Openclaw started finished. Please refer to 127.0.0.1:56123
+OpenClaw is ready.
+  Gateway endpoint: http://127.0.0.1:56123
+  Sandbox data access mode: broker-only
 ```
 
-最后打印的地址（如 `127.0.0.1:56123`）就是沙箱中 OpenClaw Gateway 的可访问端点。
+## 默认配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OPENCLAW_SERVER` | `http://localhost:8090` | 本仓库 compose 的 OpenSandbox 服务地址 |
+| `OPENCLAW_IMAGE` | `opensandbox/openclaw-broker:latest` | broker-first 沙箱镜像 |
+| `OPENCLAW_TIMEOUT` | `3600` | 沙箱超时时间（秒） |
+| `OPENCLAW_TOKEN` | `dummy-token-for-sandbox` | Gateway token 的默认回退值 |
+| `OPENCLAW_GATEWAY_TOKEN` | `dummy-token-for-sandbox` | 传入沙箱的 Gateway token |
+| `OPENCLAW_PORT` | `8080` | 沙箱内 OpenClaw Gateway 端口 |
+| `OPENCLAW_DATA_BROKER_URL` | `http://host.docker.internal:3302` | bridge 模式沙箱访问 broker 的地址 |
+| `OPENCLAW_DATA_BROKER_TOKEN` | `broker-secret` | 沙箱 helper 使用的 Bearer token |
+| `OPENCLAW_ALLOWED_EGRESS` | 内置 allowlist | 如果模型供应方不同，可自行追加主机列表 |
+
+如果你使用的是仓库外单独启动的 `opensandbox-server`，并且端口是 `http://localhost:8080`，请在运行前覆盖 `OPENCLAW_SERVER`。
+
+## 网络策略
+
+示例默认采用拒绝所有出站流量，然后只允许 OpenClaw 常用目标：
+
+- `host.docker.internal`，用于访问 Data Broker
+- `api.openai.com`
+- `api.anthropic.com`
+- `openrouter.ai`
+- `github.com`
+- `api.github.com`
+
+如需调整 allowlist：
+
+```shell
+export OPENCLAW_ALLOWED_EGRESS="host.docker.internal,api.openai.com,my-model-gateway.internal"
+```
+
+## Broker 约束
+
+镜像会预置 `/workspace/AGENTS.md` 和 `/workspace/TOOLS.md`，明确要求 OpenClaw agent：
+
+- 先执行 `broker-query schema`
+- 通过 broker 路由获取客户和账户数据
+- 如果字段缺失，报告契约缺口，而不是绕过 broker
+
+由于这个仓库当前的 lifecycle API 仍然要求显式传入 `entrypoint`，示例会传：
+
+```shell
+/opt/opensandbox/openclaw-entrypoint.sh
+```
+
+沙箱内可用 helper：
+
+```shell
+broker-query schema
+broker-query customer-profile cust_acme_001
+broker-query customer-orders cust_acme_001 5
+broker-query account-summary acct_apac_001
+```
 
 ## 参考
 
 - [OpenClaw](https://github.com/openclaw/openclaw)
 - [OpenSandbox Python SDK](https://pypi.org/project/opensandbox/)
+- [Broker 沙箱镜像](../../sandboxes/openclaw-broker/README.md)

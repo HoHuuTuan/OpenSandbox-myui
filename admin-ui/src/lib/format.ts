@@ -1,5 +1,5 @@
 export function formatDate(value?: string | null) {
-  if (!value) return "—";
+  if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("vi-VN", {
@@ -9,7 +9,7 @@ export function formatDate(value?: string | null) {
 }
 
 export function formatRelativeFromNow(value?: string | null) {
-  if (!value) return "—";
+  if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   const diffSeconds = Math.round((date.getTime() - Date.now()) / 1000);
@@ -20,12 +20,14 @@ export function formatRelativeFromNow(value?: string | null) {
     ["minute", 60],
     ["second", 1],
   ];
+
   for (const [unit, step] of units) {
     if (Math.abs(diffSeconds) >= step || unit === "second") {
       return formatter.format(Math.round(diffSeconds / step), unit);
     }
   }
-  return "—";
+
+  return "-";
 }
 
 export function parseKeyValueText(input: string) {
@@ -41,4 +43,46 @@ export function parseKeyValueText(input: string) {
       if (key) acc[key] = value;
       return acc;
     }, {});
+}
+
+export function parseNetworkPolicyText(input: string) {
+  const policy: {
+    defaultAction?: "allow" | "deny";
+    egress: Array<{ action: "allow" | "deny"; target: string }>;
+  } = {
+    egress: [],
+  };
+
+  for (const rawLine of input.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex === -1) continue;
+
+    const key = line.slice(0, separatorIndex).trim().toLowerCase();
+    const value = line.slice(separatorIndex + 1).trim();
+    if (!value) continue;
+
+    if (key === "default" && (value === "allow" || value === "deny")) {
+      policy.defaultAction = value;
+      continue;
+    }
+
+    if (key === "allow" || key === "deny") {
+      policy.egress.push({
+        action: key,
+        target: value,
+      });
+    }
+  }
+
+  if (!policy.defaultAction && policy.egress.length === 0) {
+    return undefined;
+  }
+
+  return {
+    ...(policy.defaultAction ? { defaultAction: policy.defaultAction } : {}),
+    ...(policy.egress.length ? { egress: policy.egress } : {}),
+  };
 }
