@@ -24,6 +24,13 @@ function readBearerToken(req) {
   return match ? match[1] : "";
 }
 
+function requireOption(value, name) {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  throw new Error(`Missing required configuration: ${name}`);
+}
+
 async function fetchJson(url, init) {
   const response = await fetch(url, init);
   const text = await response.text();
@@ -175,12 +182,22 @@ async function handleRequest(req, res, options) {
   });
 }
 
-function createDataBrokerServer(options = {}) {
-  const resolvedOptions = {
-    brokerToken: options.brokerToken || process.env.DATA_BROKER_TOKEN || "broker-secret",
-    sourceBaseUrl: (options.sourceBaseUrl || process.env.DATA_BROKER_SOURCE_BASE_URL || "http://127.0.0.1:3301").replace(/\/$/, ""),
-    sourceToken: options.sourceToken || process.env.DATA_BROKER_SOURCE_TOKEN || "source-secret",
+function buildDataBrokerOptions(options = {}) {
+  return {
+    brokerToken: requireOption(options.brokerToken ?? process.env.DATA_BROKER_TOKEN, "DATA_BROKER_TOKEN"),
+    sourceBaseUrl: requireOption(
+      options.sourceBaseUrl ?? process.env.DATA_BROKER_SOURCE_BASE_URL,
+      "DATA_BROKER_SOURCE_BASE_URL",
+    ).replace(/\/$/, ""),
+    sourceToken: requireOption(
+      options.sourceToken ?? process.env.DATA_BROKER_SOURCE_TOKEN,
+      "DATA_BROKER_SOURCE_TOKEN",
+    ),
   };
+}
+
+function createDataBrokerServer(options = {}) {
+  const resolvedOptions = buildDataBrokerOptions(options);
 
   return http.createServer((req, res) => {
     void handleRequest(req, res, resolvedOptions);
@@ -196,5 +213,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildDataBrokerOptions,
   createDataBrokerServer,
 };

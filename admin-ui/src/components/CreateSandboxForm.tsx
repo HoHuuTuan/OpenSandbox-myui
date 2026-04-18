@@ -232,7 +232,7 @@ export function CreateSandboxForm({
       </label>
 
       <label>
-        Network policy, one `default=deny|allow` or `allow=domain` / `deny=domain` per line
+        Network policy, one `default=deny|allow` or `allow=target` / `deny=target` per line
         <textarea
           className="text-area"
           value={form.networkPolicyText}

@@ -13,7 +13,7 @@ RUN mkdir -p /workspace /opt/opensandbox \
 
 COPY --chown=node:node scripts/broker-query /usr/local/bin/broker-query
 COPY --chown=node:node scripts/openclaw-entrypoint.sh /opt/opensandbox/openclaw-entrypoint.sh
-COPY --chown=node:node workspace/ /workspace/
+COPY --chown=node:node profiles/ /opt/opensandbox/profiles/
 
 RUN chmod 755 /usr/local/bin/broker-query /opt/opensandbox/openclaw-entrypoint.sh
 

@@ -16,6 +16,8 @@ package dnsproxy
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -80,6 +82,28 @@ func TestExtractResolvedIPs_EmptyOrNil(t *testing.T) {
 	require.Nil(t, extractResolvedIPs(msg), "empty answer: expected nil")
 	msg.Answer = []dns.RR{&dns.CNAME{Hdr: dns.RR_Header{Name: "x."}, Target: "y."}}
 	require.Nil(t, extractResolvedIPs(msg), "CNAME only: expected nil")
+}
+
+func TestDiscoverUpstreamsFromResolvFileUsesDockerExtServersWhenOnlyLoopbackIsConfigured(t *testing.T) {
+	dir := t.TempDir()
+	resolv := filepath.Join(dir, "resolv.conf")
+	content := "nameserver 127.0.0.11\noptions ndots:0\n# ExtServers: [host(192.168.65.7), host(192.168.65.8)]\n"
+	require.NoError(t, os.WriteFile(resolv, []byte(content), 0o644))
+
+	upstreams, err := discoverUpstreamsFromResolvFile(resolv)
+	require.NoError(t, err)
+	require.Equal(t, []string{"192.168.65.7:53", "192.168.65.8:53"}, upstreams)
+}
+
+func TestParseDockerExtServerUpstreamsIgnoresLoopbackAndMalformedEntries(t *testing.T) {
+	dir := t.TempDir()
+	resolv := filepath.Join(dir, "resolv.conf")
+	content := "# ExtServers: [host(127.0.0.11), host(192.168.65.7), malformed, host(2001:db8::53)]\n"
+	require.NoError(t, os.WriteFile(resolv, []byte(content), 0o644))
+
+	upstreams, err := parseDockerExtServerUpstreams(resolv, "53")
+	require.NoError(t, err)
+	require.Equal(t, []string{"192.168.65.7:53", "[2001:db8::53]:53"}, upstreams)
 }
 
 func TestSetOnResolved(t *testing.T) {

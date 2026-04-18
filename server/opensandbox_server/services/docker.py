@@ -22,6 +22,7 @@ using Docker containers for sandbox lifecycle management.
 from __future__ import annotations
 
 import inspect
+import ipaddress
 import io
 import json
 import logging
@@ -37,6 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock, Timer
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import docker
@@ -55,6 +57,7 @@ from opensandbox_server.api.schema import (
     ListSandboxesRequest,
     ListSandboxesResponse,
     NetworkPolicy,
+    NetworkRule,
     PaginationInfo,
     RenewSandboxExpirationRequest,
     RenewSandboxExpirationResponse,
@@ -1024,10 +1027,25 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         expires_at: Optional[datetime],
         pvc_inspect_cache: Optional[dict[str, dict]] = None,
     ) -> CreateSandboxResponse:
-        labels, environment = self._build_labels_and_env(sandbox_id, request, expires_at)
         image_uri, auth_config = self._resolve_image_auth(request, sandbox_id)
         mem_limit, nano_cpus = self._resolve_resource_limits(request)
         egress_token: Optional[str] = None
+
+        effective_network_policy, rewritten_env = self._resolve_internal_network_targets(
+            request.network_policy,
+            request.env,
+        )
+        if effective_network_policy is not request.network_policy or rewritten_env:
+            effective_env = dict(request.env or {})
+            effective_env.update(rewritten_env)
+            request = request.model_copy(
+                update={
+                    "env": effective_env,
+                    "network_policy": effective_network_policy,
+                }
+            )
+
+        labels, environment = self._build_labels_and_env(sandbox_id, request, expires_at)
 
         # Prepare OSSFS mounts first so binds can reference mounted host paths.
         ossfs_mount_keys = self._prepare_ossfs_mounts(request.volumes)
@@ -1047,19 +1065,14 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
             host_config_kwargs: Dict[str, Any]
             exposed_ports: Optional[list[str]] = None
 
-            if request.network_policy:
+            if effective_network_policy:
                 egress_token = generate_egress_token()
                 labels[SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY] = egress_token
-                host_execd_port, host_http_port = self._allocate_distinct_host_ports()
                 sidecar_container = self._start_egress_sidecar(
                     sandbox_id=sandbox_id,
-                    network_policy=request.network_policy,
+                    network_policy=effective_network_policy,
                     egress_token=egress_token,
-                    host_execd_port=host_execd_port,
-                    host_http_port=host_http_port,
                 )
-                labels[SANDBOX_EMBEDDING_PROXY_PORT_LABEL] = str(host_execd_port)
-                labels[SANDBOX_HTTP_PORT_LABEL] = str(host_http_port)
                 host_config_kwargs = self._base_host_config_kwargs(
                     mem_limit, nano_cpus, f"container:{sidecar_container.id}"
                 )
@@ -1073,15 +1086,9 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
                     mem_limit, nano_cpus, self.network_mode
                 )
                 if self.network_mode != HOST_NETWORK_MODE:
-                    host_execd_port, host_http_port = self._allocate_distinct_host_ports()
-                    port_bindings = {
-                        "44772": ("0.0.0.0", host_execd_port),
-                        "8080": ("0.0.0.0", host_http_port),
-                    }
+                    port_bindings = self._build_dynamic_host_port_bindings()
                     host_config_kwargs["port_bindings"] = port_bindings
                     exposed_ports = list(port_bindings.keys())
-                    labels[SANDBOX_EMBEDDING_PROXY_PORT_LABEL] = str(host_execd_port)
-                    labels[SANDBOX_HTTP_PORT_LABEL] = str(host_http_port)
 
             # Inject volume bind mounts into Docker host config
             if volume_binds:
@@ -1170,27 +1177,13 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         if not request.network_policy:
             return
 
-        # Docker-specific validation: network_mode must be bridge
+        # Docker-specific validation: networkPolicy is supported on bridge and user-defined networks.
         if self.network_mode == HOST_NETWORK_MODE:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "code": SandboxErrorCodes.INVALID_PARAMETER,
                     "message": "networkPolicy is not supported when docker network_mode=host.",
-                },
-            )
-
-        # User-defined networks cannot be combined with networkPolicy: the egress sidecar
-        # always runs on the default bridge, which would silently discard the configured network.
-        if self._is_user_defined_network():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": SandboxErrorCodes.INVALID_PARAMETER,
-                    "message": (
-                        f"networkPolicy is not supported when docker network_mode='{self.network_mode}' "
-                        "(user-defined network). Use network_mode='bridge' to enable network policy enforcement."
-                    ),
                 },
             )
 
@@ -1812,6 +1805,8 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
             if self.network_mode != HOST_NETWORK_MODE:
                 return self._resolve_host_mapped_endpoint(
                     self._resolve_proxy_host(),
+                    sandbox_id,
+                    container,
                     labels,
                     port,
                 )
@@ -1831,11 +1826,13 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         # non-host mode (bridge / user-defined network)
         container = self._get_container_by_sandbox_id(sandbox_id)
         labels = container.attrs.get("Config", {}).get("Labels") or {}
-        return self._resolve_host_mapped_endpoint(public_host, labels, port)
+        return self._resolve_host_mapped_endpoint(public_host, sandbox_id, container, labels, port)
 
     def _resolve_host_mapped_endpoint(
         self,
         public_host: str,
+        sandbox_id: str,
+        container,
         labels: dict[str, str],
         port: int,
     ) -> Endpoint:
@@ -1847,6 +1844,13 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
             labels.get(SANDBOX_HTTP_PORT_LABEL),
             SANDBOX_HTTP_PORT_LABEL,
         )
+        live_execd_host_port, live_http_host_port = self._resolve_live_host_mapped_ports(
+            sandbox_id,
+            container,
+            labels,
+        )
+        execd_host_port = live_execd_host_port or execd_host_port
+        http_host_port = live_http_host_port or http_host_port
 
         if port == 8080:
             if http_host_port is None:
@@ -1871,6 +1875,24 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         endpoint = Endpoint(endpoint=f"{public_host}:{execd_host_port}/proxy/{port}")
         self._attach_egress_auth_headers(endpoint, labels)
         return endpoint
+
+    def _resolve_live_host_mapped_ports(
+        self,
+        sandbox_id: str,
+        container,
+        labels: dict[str, str],
+    ) -> tuple[Optional[int], Optional[int]]:
+        target_container = self._get_egress_sidecar_container(sandbox_id) or container
+
+        execd_host_port = self._read_published_host_port(target_container, 44772)
+        http_host_port = self._read_published_host_port(target_container, 8080)
+
+        # If the sidecar has not published ports yet, fall back to the main container.
+        if target_container is not container and (execd_host_port is None or http_host_port is None):
+            execd_host_port = execd_host_port or self._read_published_host_port(container, 44772)
+            http_host_port = http_host_port or self._read_published_host_port(container, 8080)
+
+        return execd_host_port, http_host_port
 
     def _attach_egress_auth_headers(
         self,
@@ -2063,8 +2085,6 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         sandbox_id: str,
         network_policy: NetworkPolicy,
         egress_token: str,
-        host_execd_port: int,
-        host_http_port: int,
     ):
         sidecar_name = f"sandbox-egress-{sandbox_id}"
         sidecar_labels = {
@@ -2086,13 +2106,13 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
             f"{OPENSANDBOX_EGRESS_TOKEN}={egress_token}",
         ]
 
+        sidecar_network_mode = (
+            self.network_mode if self._is_user_defined_network() else BRIDGE_NETWORK_MODE
+        )
         sidecar_host_config_kwargs: dict[str, Any] = {
-            "network_mode": BRIDGE_NETWORK_MODE,
+            "network_mode": sidecar_network_mode,
             "cap_add": ["NET_ADMIN"],
-            "port_bindings": {
-                "44772": ("0.0.0.0", host_execd_port),
-                "8080": ("0.0.0.0", host_http_port),
-            },
+            "port_bindings": self._build_dynamic_host_port_bindings(),
             # FIXME(Pangjiping): Disable IPv6 in the shared namespace to keep policy enforcement consistent.
             "sysctls": {
                 "net.ipv6.conf.all.disable_ipv6": 1,
@@ -2101,8 +2121,14 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
             },
         }
 
+        sidecar_container_kwargs: dict[str, Any] = {}
+        effective_sidecar_host_config_kwargs = dict(sidecar_host_config_kwargs)
+        if self._is_user_defined_network():
+            effective_sidecar_host_config_kwargs.pop("network_mode", None)
+            sidecar_container_kwargs["networking_config"] = self._build_user_defined_networking_config()
+
         sidecar_host_config = self.docker_client.api.create_host_config(
-            **sidecar_host_config_kwargs
+            **effective_sidecar_host_config_kwargs
         )
 
         sidecar_container = None
@@ -2117,6 +2143,7 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
                     environment=sidecar_env,
                     # Expose the ports that have host bindings so Docker publishes them in bridge mode.
                     ports=["44772", "8080"],
+                    **sidecar_container_kwargs,
                 )
             sidecar_container_id = sidecar_resp.get("Id")
             if not sidecar_container_id:
@@ -2178,7 +2205,16 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
 
             bootstrap_command = shlex.split(bootstrap_command[0])
 
-        host_config = self.docker_client.api.create_host_config(**host_config_kwargs)
+        container_kwargs_extra: Dict[str, Any] = {}
+        effective_host_config_kwargs = dict(host_config_kwargs)
+        if (
+            self._is_user_defined_network()
+            and effective_host_config_kwargs.get("network_mode") == self.network_mode
+        ):
+            effective_host_config_kwargs.pop("network_mode", None)
+            container_kwargs_extra["networking_config"] = self._build_user_defined_networking_config()
+
+        host_config = self.docker_client.api.create_host_config(**effective_host_config_kwargs)
         container = None
         container_id: Optional[str] = None
         try:
@@ -2193,6 +2229,7 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
                     "labels": labels,
                     "host_config": host_config,
                 }
+                container_kwargs.update(container_kwargs_extra)
 
                 response = self.docker_client.api.create_container(**container_kwargs)
             container_id = response.get("Id")
@@ -2254,6 +2291,140 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
         except ValueError:
             logger.warning("Invalid port label %s=%s", label_name, value)
             return None
+
+    @staticmethod
+    def _build_dynamic_host_port_bindings() -> dict[str, tuple[str, int]]:
+        """Ask Docker to publish the sandbox ports on random available host ports."""
+        return {
+            "44772": ("0.0.0.0", 0),
+            "8080": ("0.0.0.0", 0),
+        }
+
+    def _build_user_defined_networking_config(self):
+        endpoint_config = self.docker_client.api.create_endpoint_config()
+        return self.docker_client.api.create_networking_config(
+            {
+                self.network_mode: endpoint_config,
+            }
+        )
+
+    @staticmethod
+    def _read_published_host_port(
+        container,
+        container_port: int,
+        *,
+        attempts: int = 20,
+        delay_seconds: float = 0.1,
+    ) -> Optional[int]:
+        port_key = f"{container_port}/tcp"
+
+        for attempt in range(attempts):
+            try:
+                container.reload()
+            except AttributeError:
+                pass
+            except DockerException:
+                break
+
+            ports = (container.attrs.get("NetworkSettings", {}) or {}).get("Ports", {}) or {}
+            bindings = ports.get(port_key) or ports.get(str(container_port)) or []
+            if isinstance(bindings, list):
+                for binding in bindings:
+                    host_port = str((binding or {}).get("HostPort") or "").strip()
+                    if not host_port:
+                        continue
+                    try:
+                        port = int(host_port)
+                    except ValueError:
+                        continue
+                    if 0 < port <= 65535:
+                        return port
+
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds)
+
+        return None
+
+    def _get_egress_sidecar_container(self, sandbox_id: str):
+        try:
+            containers = self.docker_client.containers.list(
+                all=True,
+                filters={"label": f"{EGRESS_SIDECAR_LABEL}={sandbox_id}"},
+            )
+        except DockerException as exc:
+            logger.warning("sandbox=%s | failed to query egress sidecar for endpoint resolution: %s", sandbox_id, exc)
+            return None
+
+        return containers[0] if containers else None
+
+    def _resolve_internal_network_targets(
+        self,
+        network_policy: Optional[NetworkPolicy],
+        env: Optional[dict[str, Optional[str]]],
+    ) -> tuple[Optional[NetworkPolicy], dict[str, str]]:
+        if not network_policy or not self._is_user_defined_network():
+            return network_policy, {}
+
+        try:
+            network = self.docker_client.networks.get(self.network_mode)
+        except DockerException as exc:
+            logger.warning("failed to inspect docker network %s for internal targets: %s", self.network_mode, exc)
+            return network_policy, {}
+
+        containers = (network.attrs or {}).get("Containers") or {}
+        docker_targets: dict[str, str] = {}
+        for details in containers.values():
+            name = str(details.get("Name") or "").strip()
+            ip_cidr = str(details.get("IPv4Address") or "").strip()
+            ip = ip_cidr.split("/", 1)[0].strip()
+            if not name or not ip:
+                continue
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            docker_targets[name] = ip
+
+        if not docker_targets:
+            return network_policy, {}
+
+        rewritten_env: dict[str, str] = {}
+        effective_rules: list[NetworkRule] = list(network_policy.egress or [])
+        existing_targets = {rule.target for rule in effective_rules}
+        for rule in list(effective_rules):
+            if rule.action != "allow":
+                continue
+            internal_ip = docker_targets.get(rule.target)
+            if not internal_ip:
+                continue
+            if internal_ip not in existing_targets:
+                effective_rules.append(NetworkRule(action="allow", target=internal_ip))
+                existing_targets.add(internal_ip)
+
+        for key, value in (env or {}).items():
+            if not value:
+                continue
+            try:
+                parsed = urlparse(value)
+            except ValueError:
+                continue
+            if not parsed.scheme or not parsed.hostname:
+                continue
+            internal_ip = docker_targets.get(parsed.hostname)
+            if not internal_ip:
+                continue
+            netloc = internal_ip
+            if parsed.port:
+                netloc = f"{internal_ip}:{parsed.port}"
+            rewritten_env[key] = urlunparse(parsed._replace(netloc=netloc))
+
+        if not rewritten_env and len(effective_rules) == len(network_policy.egress or []):
+            return network_policy, {}
+
+        return (
+            NetworkPolicy(default_action=network_policy.default_action, egress=effective_rules),
+            rewritten_env,
+        )
 
     def _extract_bridge_ip(self, container) -> str:
         """Extract the IP address assigned to a container on a bridge or user-defined network.

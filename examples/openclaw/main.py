@@ -24,34 +24,51 @@ from opensandbox.models.sandboxes import NetworkPolicy, NetworkRule
 
 DEFAULT_SERVER = os.getenv("OPENCLAW_SERVER", "http://localhost:8090")
 DEFAULT_IMAGE = os.getenv("OPENCLAW_IMAGE", "opensandbox/openclaw-broker:latest")
+DEFAULT_ROLE = os.getenv("OPENCLAW_ROLE", "private-data")
 DEFAULT_TIMEOUT = int(os.getenv("OPENCLAW_TIMEOUT", "3600"))
 DEFAULT_GATEWAY_TOKEN = os.getenv("OPENCLAW_TOKEN", "dummy-token-for-sandbox")
 DEFAULT_GATEWAY_PORT = int(os.getenv("OPENCLAW_PORT", "8080"))
 DEFAULT_DATA_BROKER_URL = os.getenv(
     "OPENCLAW_DATA_BROKER_URL",
-    "http://host.docker.internal:3302",
+    "http://data-broker:3302",
 )
 DEFAULT_DATA_BROKER_TOKEN = os.getenv(
     "OPENCLAW_DATA_BROKER_TOKEN",
-    "broker-secret",
+    "broker-local-token",
 )
-DEFAULT_ALLOWED_EGRESS = [
-    "host.docker.internal",
-    "api.openai.com",
-    "api.anthropic.com",
-    "openrouter.ai",
-    "github.com",
-    "api.github.com",
-]
+DEFAULT_MODEL_GATEWAY_URL = os.getenv(
+    "OPENCLAW_MODEL_GATEWAY_URL",
+    "http://model-gateway:3401/v1",
+)
+DEFAULT_MODEL_GATEWAY_TOKEN = os.getenv(
+    "OPENCLAW_MODEL_GATEWAY_TOKEN",
+    "model-gateway-local-token",
+)
+DEFAULT_MODEL_PROVIDER_ID = os.getenv("OPENCLAW_MODEL_PROVIDER_ID", "internal-model")
+DEFAULT_MODEL_ID = os.getenv("OPENCLAW_MODEL_ID", "mock-gpt-oss-mini")
+DEFAULT_MODEL_NAME = os.getenv("OPENCLAW_MODEL_NAME", "Internal Mock GPT OSS Mini")
+ROLE_ALLOWED_EGRESS = {
+    "public-web": [
+        "model-gateway",
+        "github.com",
+        "api.github.com",
+        "developer.mozilla.org",
+        "docs.python.org",
+    ],
+    "private-data": [
+        "model-gateway",
+        "data-broker",
+    ],
+}
 
 
-def parse_allowed_egress() -> list[str]:
+def parse_allowed_egress(role: str) -> list[str]:
     raw_value = os.getenv("OPENCLAW_ALLOWED_EGRESS", "")
     if not raw_value.strip():
-        return DEFAULT_ALLOWED_EGRESS
+        return ROLE_ALLOWED_EGRESS.get(role, ROLE_ALLOWED_EGRESS["private-data"])
 
     hosts = [host.strip() for host in raw_value.split(",") if host.strip()]
-    return hosts or DEFAULT_ALLOWED_EGRESS
+    return hosts or ROLE_ALLOWED_EGRESS.get(role, ROLE_ALLOWED_EGRESS["private-data"])
 
 
 def check_openclaw(sbx: SandboxSync, port: int) -> bool:
@@ -78,24 +95,59 @@ def check_openclaw(sbx: SandboxSync, port: int) -> bool:
         return False
 
 
-def build_network_policy() -> NetworkPolicy:
-    rules = [NetworkRule(action="allow", target=host) for host in parse_allowed_egress()]
+def build_network_policy(role: str) -> NetworkPolicy:
+    rules = [NetworkRule(action="allow", target=host) for host in parse_allowed_egress(role)]
     return NetworkPolicy(defaultAction="deny", egress=rules)
+
+
+def build_metadata(role: str) -> dict[str, str]:
+    metadata = {
+        "example": "openclaw",
+        "trust-boundary": role,
+    }
+    if role == "private-data":
+        metadata["data-access"] = "broker-only"
+    return metadata
+
+
+def build_env(role: str, gateway_port: int, gateway_token: str) -> dict[str, str]:
+    env = {
+        "OPENCLAW_TRUST_ROLE": role,
+        "OPENCLAW_GATEWAY_PORT": str(gateway_port),
+        "OPENCLAW_GATEWAY_TOKEN": gateway_token,
+        "OPENCLAW_MODEL_GATEWAY_URL": DEFAULT_MODEL_GATEWAY_URL,
+        "OPENCLAW_MODEL_GATEWAY_TOKEN": DEFAULT_MODEL_GATEWAY_TOKEN,
+        "OPENCLAW_MODEL_PROVIDER_ID": DEFAULT_MODEL_PROVIDER_ID,
+        "OPENCLAW_MODEL_ID": DEFAULT_MODEL_ID,
+        "OPENCLAW_MODEL_NAME": DEFAULT_MODEL_NAME,
+    }
+
+    if role == "private-data":
+        env["OPENCLAW_DATA_BROKER_URL"] = DEFAULT_DATA_BROKER_URL
+        env["OPENCLAW_DATA_BROKER_TOKEN"] = DEFAULT_DATA_BROKER_TOKEN
+
+    return env
 
 
 def main() -> None:
     server = DEFAULT_SERVER
     image = DEFAULT_IMAGE
+    role = DEFAULT_ROLE
     timeout_seconds = DEFAULT_TIMEOUT
     gateway_token = os.getenv("OPENCLAW_GATEWAY_TOKEN", DEFAULT_GATEWAY_TOKEN)
     gateway_port = DEFAULT_GATEWAY_PORT
-    broker_url = DEFAULT_DATA_BROKER_URL
-    broker_token = DEFAULT_DATA_BROKER_TOKEN
+    env = build_env(role, gateway_port, gateway_token)
 
-    print(f"Creating broker-first OpenClaw sandbox with image={image} on {server}...")
+    if role not in ROLE_ALLOWED_EGRESS:
+        raise ValueError(f"Unsupported OPENCLAW_ROLE={role}")
+
+    print(f"Creating OpenClaw sandbox with image={image} on {server}...")
+    print(f"  Trust boundary: {role}")
     print(f"  Gateway port: {gateway_port}")
     print(f"  Timeout: {timeout_seconds}s")
-    print(f"  Data Broker: {broker_url}")
+    print(f"  Model gateway: {DEFAULT_MODEL_GATEWAY_URL}")
+    if role == "private-data":
+        print(f"  Data Broker: {DEFAULT_DATA_BROKER_URL}")
     print(
         f"  Gateway token: {gateway_token[:16]}..."
         if len(gateway_token) > 16
@@ -106,25 +158,19 @@ def main() -> None:
         image=image,
         timeout=timedelta(seconds=timeout_seconds),
         entrypoint=["/opt/opensandbox/openclaw-entrypoint.sh"],
-        metadata={
-            "example": "openclaw",
-            "data-access": "broker-only",
-        },
+        metadata=build_metadata(role),
         connection_config=ConnectionConfigSync(domain=server),
         health_check=lambda sbx: check_openclaw(sbx, gateway_port),
-        env={
-            "OPENCLAW_GATEWAY_PORT": str(gateway_port),
-            "OPENCLAW_GATEWAY_TOKEN": gateway_token,
-            "OPENCLAW_DATA_BROKER_URL": broker_url,
-            "OPENCLAW_DATA_BROKER_TOKEN": broker_token,
-        },
-        network_policy=build_network_policy(),
+        env=env,
+        network_policy=build_network_policy(role),
     )
 
     endpoint = sandbox.get_endpoint(gateway_port)
     print("OpenClaw is ready.")
     print(f"  Gateway endpoint: http://{endpoint.endpoint}")
-    print("  Sandbox data access mode: broker-only")
+    print(f"  Sandbox trust boundary: {role}")
+    if role == "private-data":
+        print("  Sandbox data access mode: broker-only")
 
 
 if __name__ == "__main__":

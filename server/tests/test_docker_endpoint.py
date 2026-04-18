@@ -133,6 +133,56 @@ def test_get_endpoint_bridge_egress_port_includes_auth_header(mock_docker_servic
     assert endpoint.headers == {OPEN_SANDBOX_EGRESS_AUTH_HEADER: "egress-token"}
 
 
+def test_get_endpoint_bridge_egress_port_reads_live_sidecar_mapping_when_labels_missing(
+    mock_docker_service,
+):
+    service, mock_client = mock_docker_service
+    service.app_config.docker.network_mode = "bridge"
+    service.network_mode = "bridge"
+
+    main_container = MagicMock()
+    main_container.reload = MagicMock()
+    main_container.attrs = {
+        "State": {"Running": True},
+        "Config": {"Labels": {SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY: "egress-token"}},
+        "HostConfig": {"NetworkMode": "container:sidecar-id"},
+        "NetworkSettings": {"IPAddress": "", "Ports": {}},
+    }
+
+    sidecar_container = MagicMock()
+    sidecar_container.reload = MagicMock()
+    sidecar_container.attrs = {
+        "State": {"Running": True},
+        "Config": {"Labels": {"opensandbox.io/egress-sidecar-for": "sbx-123"}},
+        "NetworkSettings": {
+            "Ports": {
+                "44772/tcp": [{"HostPort": "51000"}],
+                "8080/tcp": [{"HostPort": "51001"}],
+            }
+        },
+    }
+
+    def list_side_effect(*args, **kwargs):
+        label = (kwargs.get("filters") or {}).get("label")
+        if label == "opensandbox.io/egress-sidecar-for=sbx-123":
+            return [sidecar_container]
+        return []
+
+    mock_client.containers.list.side_effect = list_side_effect
+
+    with (
+        patch.object(service, "_get_container_by_sandbox_id", return_value=main_container),
+        patch(
+            "opensandbox_server.services.sandbox_service.SandboxService._resolve_bind_ip",
+            return_value="192.168.1.100",
+        ),
+    ):
+        endpoint = service.get_endpoint("sbx-123", 18080, resolve_internal=False)
+
+    assert endpoint.endpoint == "192.168.1.100:51000/proxy/18080"
+    assert endpoint.headers == {OPEN_SANDBOX_EGRESS_AUTH_HEADER: "egress-token"}
+
+
 def test_get_endpoint_bridge_non_egress_port_still_includes_instance_auth_header(
     mock_docker_service,
 ):

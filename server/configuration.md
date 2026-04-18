@@ -78,9 +78,9 @@ Example files in this repository:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `network_mode` | string | `"host"` | Docker network attachment for sandbox containers: **`host`**, **`bridge`**, or a **custom user-defined network name**. Egress sidecar + `networkPolicy` require **`bridge`** (see [Egress](#egress)). |
+| `network_mode` | string | `"host"` | Docker network attachment for sandbox containers: **`host`**, **`bridge`**, or a **custom user-defined network name**. Egress sidecar + `networkPolicy` require a routed Docker network: **`bridge`** or a **custom user-defined network** (see [Egress](#egress)). |
 | `api_timeout` | integer \| omitted | `null` | Docker API timeout in **seconds**. If unset, the code uses default **180** s where applicable. |
-| `host_ip` | string \| omitted | `null` | Hostname or IP used when **rewriting** bridge-mode endpoint URLs (e.g. server runs in Docker and clients need a host-reachable address). Often `host.docker.internal` or the host LAN IP on Linux. |
+| `host_ip` | string \| omitted | `null` | Hostname or IP used when **rewriting** host-mapped Docker endpoint URLs (e.g. server runs in Docker and clients need a host-reachable address). Often `host.docker.internal` or the host LAN IP on Linux. |
 | `drop_capabilities` | list of strings | See `config.py` | Linux capabilities **dropped** from sandbox containers (security hardening). |
 | `apparmor_profile` | string \| omitted | `null` | Optional AppArmor profile name (e.g. `"docker-default"`). Empty/unset lets Docker use its default. |
 | `no_new_privileges` | boolean | `true` | Sets `no-new-privileges` to block privilege escalation. |
@@ -177,7 +177,7 @@ Configures the **egress sidecar** image and enforcement mode. The server only at
 **Docker notes:**
 
 - `egress.image` must be set when using `networkPolicy`.
-- Outbound policy requires **`docker.network_mode = "bridge"`**; `networkPolicy` is rejected for incompatible network modes.
+- Outbound policy requires a routed Docker network: **`docker.network_mode = "bridge"`** or a **custom user-defined network**. `networkPolicy` is still rejected for **`host`** mode.
 
 **Kubernetes notes:**
 

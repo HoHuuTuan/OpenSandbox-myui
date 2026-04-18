@@ -19,16 +19,16 @@
 
 ## Auth
 
-Clients must send:
+Clients must send an internal broker token:
 
 ```http
-Authorization: Bearer broker-secret
+Authorization: Bearer <DATA_BROKER_TOKEN>
 ```
 
 The broker then calls the mock/private source with:
 
 ```http
-x-source-api-key: source-secret
+x-source-api-key: <DATA_BROKER_SOURCE_TOKEN>
 ```
 
 ## Local run
@@ -42,7 +42,10 @@ Or run directly:
 
 ```bash
 cd server/data-broker
-DATA_BROKER_SOURCE_BASE_URL=http://127.0.0.1:3301 node server.js
+DATA_BROKER_TOKEN=broker-local-token \
+DATA_BROKER_SOURCE_BASE_URL=http://127.0.0.1:3301 \
+DATA_BROKER_SOURCE_TOKEN=source-local-secret \
+node server.js
 ```
 
 ## Test

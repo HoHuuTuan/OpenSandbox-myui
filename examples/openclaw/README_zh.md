@@ -1,20 +1,29 @@
-# OpenClaw Broker-First 示例
+# OpenClaw 双边界示例
 
-这个示例把 OpenClaw 运行在 OpenSandbox 中，并强制采用下面的标准数据链路：
+这个示例把 [OpenClaw](https://github.com/openclaw/openclaw) 运行在 OpenSandbox 中，并拆成两个明确的 trust boundary：
 
-`OpenClaw 沙箱 -> Data Broker -> 私有数据源`
+- `public-web`：只做公网 / Web 任务
+- `private-data`：只通过 `data-broker` 访问内部报表数据
 
-沙箱本身不直接拿数据库凭证，也不直连原始数据源。Data Broker 使用自己的上游凭证读取数据，然后只返回过滤、格式化、脱敏后的结果。
+标准数据链路：
+
+`OpenClaw private-data sandbox -> Data Broker -> private source`
+
+标准模型链路：
+
+`OpenClaw sandbox -> model-gateway -> upstream model provider`
+
+任何 OpenClaw sandbox 都不会直接拿到数据库凭证，也不会直连原始数据源。
 
 ## 本地端到端运行
 
-### 1. 构建 broker-first OpenClaw 镜像
+### 1. 构建 OpenClaw 镜像
 
 ```shell
 docker build -t opensandbox/openclaw-broker:latest sandboxes/openclaw-broker
 ```
 
-### 2. 启动 OpenSandbox、mock source 和 Data Broker
+### 2. 启动 OpenSandbox 和内部服务
 
 ```shell
 cd server
@@ -23,9 +32,11 @@ docker compose up --build
 
 这套 compose 会启动：
 
-- `opensandbox-server`，地址 `http://localhost:8090`
-- `mock-source`，仅在 compose 内网可见
-- `data-broker`，地址 `http://localhost:3302`
+- `opensandbox-server`：`http://localhost:8090`
+- `model-gateway`：仅内部 Docker 网络可见
+- `mock-model-provider`：仅内部 Docker 网络可见
+- `data-broker`：仅内部 Docker 网络可见
+- `mock-source`：仅内部 Docker 网络可见
 
 ### 3. 安装 Python 依赖
 
@@ -33,70 +44,56 @@ docker compose up --build
 uv pip install opensandbox requests
 ```
 
-### 4. 运行示例
+### 4. 按 boundary 启动示例
+
+private-data：
 
 ```shell
-uv run python examples/openclaw/main.py
+OPENCLAW_ROLE=private-data uv run python examples/openclaw/main.py
 ```
 
-预期输出：
+public-web：
 
-```text
-Creating broker-first OpenClaw sandbox with image=opensandbox/openclaw-broker:latest on http://localhost:8090...
-[check] sandbox ready after 7.1s
-OpenClaw is ready.
-  Gateway endpoint: http://127.0.0.1:56123
-  Sandbox data access mode: broker-only
+```shell
+OPENCLAW_ROLE=public-web uv run python examples/openclaw/main.py
 ```
 
 ## 默认配置
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `OPENCLAW_SERVER` | `http://localhost:8090` | 本仓库 compose 的 OpenSandbox 服务地址 |
-| `OPENCLAW_IMAGE` | `opensandbox/openclaw-broker:latest` | broker-first 沙箱镜像 |
-| `OPENCLAW_TIMEOUT` | `3600` | 沙箱超时时间（秒） |
-| `OPENCLAW_TOKEN` | `dummy-token-for-sandbox` | Gateway token 的默认回退值 |
-| `OPENCLAW_GATEWAY_TOKEN` | `dummy-token-for-sandbox` | 传入沙箱的 Gateway token |
-| `OPENCLAW_PORT` | `8080` | 沙箱内 OpenClaw Gateway 端口 |
-| `OPENCLAW_DATA_BROKER_URL` | `http://host.docker.internal:3302` | bridge 模式沙箱访问 broker 的地址 |
-| `OPENCLAW_DATA_BROKER_TOKEN` | `broker-secret` | 沙箱 helper 使用的 Bearer token |
-| `OPENCLAW_ALLOWED_EGRESS` | 内置 allowlist | 如果模型供应方不同，可自行追加主机列表 |
+| `OPENCLAW_SERVER` | `http://localhost:8090` | 本仓库 compose 启动的 OpenSandbox 地址 |
+| `OPENCLAW_IMAGE` | `opensandbox/openclaw-broker:latest` | trust-boundary 沙箱镜像 |
+| `OPENCLAW_ROLE` | `private-data` | boundary 角色：`public-web` 或 `private-data` |
+| `OPENCLAW_MODEL_GATEWAY_URL` | `http://model-gateway:3401/v1` | 内部模型网关 |
+| `OPENCLAW_MODEL_GATEWAY_TOKEN` | `model-gateway-local-token` | 沙箱访问模型网关的 Bearer token |
+| `OPENCLAW_DATA_BROKER_URL` | `http://data-broker:3302` | private-data boundary 使用的 broker 地址 |
+| `OPENCLAW_DATA_BROKER_TOKEN` | `broker-local-token` | `broker-query` 使用的 Bearer token |
 
-如果你使用的是仓库外单独启动的 `opensandbox-server`，并且端口是 `http://localhost:8080`，请在运行前覆盖 `OPENCLAW_SERVER`。
+## Boundary 默认出站策略
 
-## 网络策略
+`public-web`：
 
-示例默认采用拒绝所有出站流量，然后只允许 OpenClaw 常用目标：
-
-- `host.docker.internal`，用于访问 Data Broker
-- `api.openai.com`
-- `api.anthropic.com`
-- `openrouter.ai`
+- `model-gateway`
 - `github.com`
 - `api.github.com`
+- `developer.mozilla.org`
+- `docs.python.org`
 
-如需调整 allowlist：
+`private-data`：
 
-```shell
-export OPENCLAW_ALLOWED_EGRESS="host.docker.internal,api.openai.com,my-model-gateway.internal"
-```
+- `model-gateway`
+- `data-broker`
 
 ## Broker 约束
 
-镜像会预置 `/workspace/AGENTS.md` 和 `/workspace/TOOLS.md`，明确要求 OpenClaw agent：
+private-data profile 会预置 `/workspace/AGENTS.md` 和 `/workspace/TOOLS.md`，明确要求 OpenClaw agent：
 
 - 先执行 `broker-query schema`
-- 通过 broker 路由获取客户和账户数据
-- 如果字段缺失，报告契约缺口，而不是绕过 broker
+- 通过 broker 路由获取客户 / 账户 / 订单数据
+- 如果字段缺失，就报告 contract gap，而不是绕过 broker
 
-由于这个仓库当前的 lifecycle API 仍然要求显式传入 `entrypoint`，示例会传：
-
-```shell
-/opt/opensandbox/openclaw-entrypoint.sh
-```
-
-沙箱内可用 helper：
+可用 helper：
 
 ```shell
 broker-query schema
@@ -104,9 +101,3 @@ broker-query customer-profile cust_acme_001
 broker-query customer-orders cust_acme_001 5
 broker-query account-summary acct_apac_001
 ```
-
-## 参考
-
-- [OpenClaw](https://github.com/openclaw/openclaw)
-- [OpenSandbox Python SDK](https://pypi.org/project/opensandbox/)
-- [Broker 沙箱镜像](../../sandboxes/openclaw-broker/README.md)

@@ -72,13 +72,16 @@ class ResourceLimits(RootModel[Dict[str, str]]):
 
 class NetworkRule(BaseModel):
     """
-    Egress rule: allow/deny a specific domain or wildcard.
+    Egress rule: allow/deny a specific hostname, domain, wildcard, or IP target.
     """
 
     action: str = Field(..., description="Whether to allow or deny matching targets (allow | deny).")
     target: str = Field(
         ...,
-        description="FQDN or wildcard domain (e.g., 'example.com', '*.example.com').",
+        description=(
+            "Hostname, FQDN, wildcard domain, IP, or CIDR target "
+            "(e.g., 'data-broker', 'example.com', '*.example.com', '10.0.0.0/24')."
+        ),
         min_length=1,
     )
 

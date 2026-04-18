@@ -898,8 +898,8 @@ components:
         target:
           type: string
           description: |
-            FQDN or wildcard domain (e.g., "example.com", "*.example.com").
-            IP/CIDR not yet supported in the egress MVP.
+            Hostname, FQDN, wildcard domain, IP, or CIDR target
+            (e.g., "data-broker", "example.com", "*.example.com", "10.0.0.0/24").
       required: [action, target]
       additionalProperties: false
 

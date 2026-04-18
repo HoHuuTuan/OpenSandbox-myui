@@ -1,8 +1,13 @@
 #!/bin/sh
 set -eu
 
-BROKER_URL="${OPENCLAW_DATA_BROKER_URL:-http://host.docker.internal:3302}"
-BROKER_TOKEN="${OPENCLAW_DATA_BROKER_TOKEN:-broker-secret}"
+BROKER_URL="${OPENCLAW_DATA_BROKER_URL:-http://data-broker:3302}"
+BROKER_TOKEN="${OPENCLAW_DATA_BROKER_TOKEN:-}"
+
+[ -n "${BROKER_TOKEN}" ] || {
+  echo "OPENCLAW_DATA_BROKER_TOKEN is required for broker-query." >&2
+  exit 1
+}
 
 usage() {
   cat <<'EOF'
