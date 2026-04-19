@@ -1045,17 +1045,8 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
                 }
             )
 
-        labels, environment = self._build_labels_and_env(sandbox_id, request, expires_at)
-
-        # Prepare OSSFS mounts first so binds can reference mounted host paths.
-        ossfs_mount_keys = self._prepare_ossfs_mounts(request.volumes)
-        if ossfs_mount_keys:
-            labels[SANDBOX_OSSFS_MOUNTS_LABEL] = json.dumps(
-                ossfs_mount_keys,
-                separators=(",", ":"),
-            )
-
         sidecar_container = None
+        ossfs_mount_keys: list[str] = []
         try:
             # Build volume bind mounts from request volumes.
             # pvc_inspect_cache carries Docker volume inspect data from the
@@ -1067,11 +1058,15 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
 
             if effective_network_policy:
                 egress_token = generate_egress_token()
-                labels[SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY] = egress_token
                 sidecar_container = self._start_egress_sidecar(
                     sandbox_id=sandbox_id,
                     network_policy=effective_network_policy,
                     egress_token=egress_token,
+                )
+                request = self._inject_openclaw_direct_allowed_origins(
+                    request,
+                    public_host=self._resolve_public_host(),
+                    http_host_port=self._read_published_host_port(sidecar_container, 8080),
                 )
                 host_config_kwargs = self._base_host_config_kwargs(
                     mem_limit, nano_cpus, f"container:{sidecar_container.id}"
@@ -1089,6 +1084,18 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
                     port_bindings = self._build_dynamic_host_port_bindings()
                     host_config_kwargs["port_bindings"] = port_bindings
                     exposed_ports = list(port_bindings.keys())
+
+            labels, environment = self._build_labels_and_env(sandbox_id, request, expires_at)
+            if egress_token:
+                labels[SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY] = egress_token
+
+            # Prepare OSSFS mounts first so binds can reference mounted host paths.
+            ossfs_mount_keys = self._prepare_ossfs_mounts(request.volumes)
+            if ossfs_mount_keys:
+                labels[SANDBOX_OSSFS_MOUNTS_LABEL] = json.dumps(
+                    ossfs_mount_keys,
+                    separators=(",", ":"),
+                )
 
             # Inject volume bind mounts into Docker host config
             if volume_binds:
@@ -1141,6 +1148,52 @@ class DockerSandboxService(DockerDiagnosticsMixin, OSSFSMixin, SandboxService, E
             self.network_mode not in {HOST_NETWORK_MODE, BRIDGE_NETWORK_MODE, "none"}
             and not self.network_mode.startswith("container:")
         )
+
+    @staticmethod
+    def _is_openclaw_request(request: CreateSandboxRequest) -> bool:
+        entrypoint = request.entrypoint or []
+        if any("openclaw-entrypoint.sh" in part for part in entrypoint):
+            return True
+
+        env = request.env or {}
+        return any(key.startswith("OPENCLAW_") for key in env)
+
+    @staticmethod
+    def _normalize_origin_host(host: str) -> Optional[str]:
+        trimmed = (host or "").strip()
+        if not trimmed:
+            return None
+
+        parsed = urlparse(trimmed if "://" in trimmed else f"http://{trimmed}")
+        return parsed.hostname or trimmed
+
+    def _inject_openclaw_direct_allowed_origins(
+        self,
+        request: CreateSandboxRequest,
+        *,
+        public_host: str,
+        http_host_port: Optional[int],
+    ) -> CreateSandboxRequest:
+        if http_host_port is None or not self._is_openclaw_request(request):
+            return request
+
+        env = dict(request.env or {})
+        existing = env.get("OPENCLAW_GATEWAY_ALLOWED_ORIGINS", "")
+        allowed_origins = {origin.strip() for origin in existing.split(",") if origin.strip()}
+
+        origin_hosts = {"127.0.0.1", "localhost"}
+        normalized_public_host = self._normalize_origin_host(public_host)
+        if normalized_public_host:
+            origin_hosts.add(normalized_public_host)
+
+        for host in origin_hosts:
+            if ":" in host and not host.startswith("["):
+                allowed_origins.add(f"http://[{host}]:{http_host_port}")
+            else:
+                allowed_origins.add(f"http://{host}:{http_host_port}")
+
+        env["OPENCLAW_GATEWAY_ALLOWED_ORIGINS"] = ",".join(sorted(allowed_origins))
+        return request.model_copy(update={"env": env})
 
     def _validate_network_exists(self) -> None:
         """Verify the configured user-defined Docker network exists before creating a sandbox."""

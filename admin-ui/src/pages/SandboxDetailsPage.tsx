@@ -7,70 +7,184 @@ import { PageHeader } from "../components/PageHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import { useSettings } from "../context/settings";
 import { formatDate, formatRelativeFromNow } from "../lib/format";
-import { fetchSandboxEndpoint, proxyPing, runSandboxCommand } from "../lib/api";
-import { getTemplateById } from "../lib/templates";
+import { fetchSandboxEndpoint, fetchSandboxProxyHealth, runSandboxCommand } from "../lib/api";
+import { getTemplateById, type PortPreset } from "../lib/templates";
 import { useSandboxDetails } from "./hooks";
 
-void proxyPing;
+const SURFACE_KINDS = new Set<PortPreset["kind"]>(["web", "novnc", "devtools"]);
+const OPENCLAW_WAIT_TIMEOUT_MS = 90000;
+const OPENCLAW_WAIT_INTERVAL_MS = 1000;
+const OPENCLAW_HEALTH_POLL_MS = 3000;
 
-function prefersServerProxy(kind: "execd" | "web" | "novnc" | "vnc" | "devtools") {
-  return kind !== "web";
+function prefersServerProxy(port: PortPreset) {
+  return port.kind !== "web";
 }
 
-function buildSurfaceUrl(
-  endpointValue: string,
-  kind: "execd" | "web" | "novnc" | "vnc" | "devtools",
-  path?: string,
-) {
-  const endpoint = endpointValue.trim().replace(/^https?:\/\//, "");
-  if (!endpoint) return "";
-  const baseUrl = new URL(`http://${endpoint}`);
+function isSurfacePort(port: PortPreset) {
+  return SURFACE_KINDS.has(port.kind);
+}
 
-  if (kind === "novnc") {
-    const noVncPath = (path ?? "/vnc.html").replace(/^\/+/, "");
-    const proxyPath = baseUrl.pathname.replace(/\/$/, "");
-    const pageUrl = new URL(`${proxyPath}/${noVncPath}`.replace(/\/{2,}/g, "/"), `${baseUrl.protocol}//${baseUrl.host}`);
+function normalizeBrowserEndpoint(endpointValue: string) {
+  const trimmed = endpointValue.trim();
+  if (!trimmed) return null;
+
+  const protocol = typeof window !== "undefined" ? window.location.protocol : "http:";
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `${protocol}//${trimmed}`;
+  const url = new URL(withScheme);
+
+  if (
+    typeof window !== "undefined" &&
+    ["host.docker.internal", "0.0.0.0", "::"].includes(url.hostname)
+  ) {
+    url.hostname = window.location.hostname || "127.0.0.1";
+  }
+
+  return url;
+}
+
+function ensureDirectoryPath(pathname: string) {
+  const normalized = pathname || "/";
+  return normalized.endsWith("/") ? normalized : `${normalized}/`;
+}
+
+function buildSurfaceUrl(endpointValue: string, port: PortPreset) {
+  const baseUrl = normalizeBrowserEndpoint(endpointValue);
+  if (!baseUrl) return "";
+
+  const rootUrl = `${baseUrl.protocol}//${baseUrl.host}`;
+  const directoryUrl = new URL(ensureDirectoryPath(baseUrl.pathname), rootUrl);
+
+  if (port.kind === "novnc") {
+    const noVncPath = (port.path ?? "/vnc.html").replace(/^\/+/, "");
+    const proxyPath = ensureDirectoryPath(baseUrl.pathname);
+    const pageUrl = new URL(noVncPath, directoryUrl);
 
     pageUrl.searchParams.set("autoconnect", "true");
     pageUrl.searchParams.set("reconnect", "true");
     pageUrl.searchParams.set("resize", "scale");
     pageUrl.searchParams.set("host", baseUrl.hostname);
+
     if (baseUrl.port) {
       pageUrl.searchParams.set("port", baseUrl.port);
     }
-    if (proxyPath) {
-      pageUrl.searchParams.set("path", `${proxyPath.replace(/^\/+/, "")}/websockify`);
+    if (proxyPath !== "/") {
+      pageUrl.searchParams.set("path", `${proxyPath.replace(/^\/+/, "")}websockify`);
     }
 
     return pageUrl.toString();
   }
 
-  if (kind === "web" || kind === "devtools") {
-    const suffix = (path ?? "").replace(/^\/+/, "");
-    const joinedPath = suffix
-      ? `${baseUrl.pathname.replace(/\/$/, "")}/${suffix}`.replace(/\/{2,}/g, "/")
-      : baseUrl.pathname;
-    return new URL(joinedPath, `${baseUrl.protocol}//${baseUrl.host}`).toString();
+  if (port.kind === "web" || port.kind === "devtools") {
+    const suffix = (port.path ?? "").replace(/^\/+/, "");
+    return suffix ? new URL(suffix, directoryUrl).toString() : directoryUrl.toString();
   }
 
-  return endpoint;
+  return baseUrl.toString();
+}
+
+function createLoadingWindow() {
+  const child = window.open("about:blank", "_blank");
+  if (!child) return null;
+
+  child.opener = null;
+  child.document.write(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Opening OpenClaw</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0f1117;
+        color: #f5f7fb;
+        font: 16px/1.5 ui-sans-serif, system-ui, sans-serif;
+      }
+      .card {
+        max-width: 440px;
+        padding: 24px 28px;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 18px;
+        background: rgba(255,255,255,0.04);
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0;
+        color: rgba(245,247,251,0.78);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Opening OpenClaw</h1>
+      <p>The gateway is still starting. This tab will redirect as soon as the dashboard is ready.</p>
+    </div>
+  </body>
+</html>`);
+  child.document.close();
+  return child;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function updateLoadingWindow(child: Window | null, title: string, message: string) {
+  if (!child || child.closed) return;
+
+  child.document.title = title;
+  child.document.body.innerHTML = `
+    <div class="card">
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(message)}</p>
+    </div>
+  `;
+}
+
+async function waitForOpenClawReady(
+  settings: ReturnType<typeof useSettings>["settings"],
+  sandboxId: string,
+  portNumber: string,
+) {
+  const deadline = Date.now() + OPENCLAW_WAIT_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    try {
+      await fetchSandboxProxyHealth(settings, sandboxId, portNumber);
+      return;
+    } catch {
+      // Ignore transient startup failures and keep polling.
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, OPENCLAW_WAIT_INTERVAL_MS));
+  }
+
+  throw new Error("OpenClaw is still starting. Wait a bit longer, then try again.");
 }
 
 async function verifyExecd(endpoint?: string) {
-  if (!endpoint) {
-    alert("Chưa có endpoint");
+  const baseUrl = normalizeBrowserEndpoint(endpoint ?? "");
+  if (!baseUrl) {
+    alert("Endpoint is not available yet.");
     return;
   }
 
   try {
-    const res = await fetch(endpoint + "/ping");
-    if (res.ok) {
-      alert("execd OK");
-    } else {
-      alert("execd lỗi");
-    }
+    const pingUrl = new URL("ping", `${baseUrl.origin}${ensureDirectoryPath(baseUrl.pathname)}`).toString();
+    const res = await fetch(pingUrl);
+    alert(res.ok ? "execd is reachable." : "execd returned a non-OK response.");
   } catch {
-    alert("Không kết nối được execd");
+    alert("Could not reach execd.");
   }
 }
 
@@ -81,9 +195,13 @@ export function SandboxDetailsPage() {
   const [endpointPort, setEndpointPort] = useState("44772");
   const [renewValue, setRenewValue] = useState("");
   const [useServerProxy, setUseServerProxy] = useState(true);
+  const [execdEndpoint, setExecdEndpoint] = useState("");
+  const [execdEndpointHeaders, setExecdEndpointHeaders] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState("");
   const [busyAction, setBusyAction] = useState("");
   const [actionNotice, setActionNotice] = useState("");
+  const [openClawReady, setOpenClawReady] = useState(false);
+
   const { sandbox, endpoint, loading, error, refresh, pause, resume, remove, renewExpiration } = useSandboxDetails(
     sandboxId,
     endpointPort,
@@ -95,35 +213,103 @@ export function SandboxDetailsPage() {
     return getTemplateById(templateId);
   }, [sandbox?.metadata]);
 
-  const activePortPreset = template.ports.find((port) => port.port === endpointPort) ?? template.ports[0];
-  let surfaceUrl = "";
-
-  if (endpoint && activePortPreset) {
-    if (activePortPreset.kind === "web") {
-      const hostPort = endpoint.endpoint.split(":").pop();
-      surfaceUrl = `http://127.0.0.1:${hostPort}`;
-    } else {
-      surfaceUrl = buildSurfaceUrl(
-        endpoint.endpoint,
-        activePortPreset.kind,
-        activePortPreset.path
-      );
-    }
-  }
+  const activePortPreset = useMemo(
+    () => template.ports.find((port) => port.port === endpointPort) ?? template.ports[0],
+    [endpointPort, template.ports],
+  );
+  const surfaceUrl = useMemo(
+    () => (endpoint && activePortPreset ? buildSurfaceUrl(endpoint.endpoint, activePortPreset) : ""),
+    [activePortPreset, endpoint],
+  );
   const isDesktopTemplate = template.id === "desktop-agent";
+  const isOpenClawTemplate = template.id.startsWith("openclaw-");
+  const isOpenClawSurface = isOpenClawTemplate && activePortPreset.kind === "web";
+  const showEmbeddedSurface = Boolean(
+    surfaceUrl &&
+    isSurfacePort(activePortPreset) &&
+    (!isOpenClawSurface || openClawReady),
+  );
+  const metadataEntries = useMemo(() => Object.entries(sandbox?.metadata || {}), [sandbox?.metadata]);
 
   useEffect(() => {
     const matchingPreset = template.ports.find((port) => port.port === endpointPort);
     if (matchingPreset) {
-      setUseServerProxy(prefersServerProxy(matchingPreset.kind));
+      setUseServerProxy(prefersServerProxy(matchingPreset));
     }
   }, [endpointPort, template.ports]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadExecdEndpoint() {
+      if (!sandboxId) {
+        if (!cancelled) {
+          setExecdEndpoint("");
+          setExecdEndpointHeaders({});
+        }
+        return;
+      }
+
+      try {
+        const response = await fetchSandboxEndpoint(settings, sandboxId, "44772", true);
+        if (!cancelled) {
+          setExecdEndpoint(response.endpoint);
+          setExecdEndpointHeaders(response.headers ?? {});
+        }
+      } catch {
+        if (!cancelled) {
+          setExecdEndpoint("");
+          setExecdEndpointHeaders({});
+        }
+      }
+    }
+
+    void loadExecdEndpoint();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sandboxId, settings]);
+
+  useEffect(() => {
+    if (!sandboxId || !isOpenClawTemplate || sandbox?.status.state !== "Running") {
+      setOpenClawReady(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function checkHealth() {
+      try {
+        await fetchSandboxProxyHealth(settings, sandboxId, "8080");
+        if (!cancelled) {
+          setOpenClawReady(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setOpenClawReady(false);
+        }
+      }
+    }
+
+    void checkHealth();
+    const timer = window.setInterval(() => {
+      void checkHealth();
+    }, OPENCLAW_HEALTH_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isOpenClawTemplate, sandbox?.status.state, sandboxId, settings]);
+
   async function runDesktopAction(actionKey: string, command: string, successMessage: string) {
     if (!sandboxId) return;
+
     setBusyAction(actionKey);
     setActionError("");
     setActionNotice("");
+
     try {
       await runSandboxCommand(
         settings,
@@ -144,51 +330,99 @@ export function SandboxDetailsPage() {
     }
   }
 
-  async function openSurface(port: string) {
+  async function openSurface(portNumber: string) {
     if (!sandboxId) return;
 
-    const preset = template.ports.find((item) => item.port === port);
-    if (!preset) return;
+    const port = template.ports.find((item) => item.port === portNumber);
+    if (!port) return;
+    const isOpenClawPort = isOpenClawTemplate && port.kind === "web";
+    const loadingWindow = isOpenClawPort ? createLoadingWindow() : null;
 
-    setBusyAction(`open-${port}`);
+    setBusyAction(`open-${portNumber}`);
     setActionError("");
     setActionNotice("");
 
     try {
-      const res = await fetchSandboxEndpoint(
-        settings,
-        sandboxId,
-        port,
-        preset.kind !== "web"
-      );
+      const response = await fetchSandboxEndpoint(settings, sandboxId, portNumber, prefersServerProxy(port));
+      const finalUrl = buildSurfaceUrl(response.endpoint, port);
 
-      const endpointValue = res.endpoint;
-
-      if (!endpointValue) {
+      if (!finalUrl) {
         throw new Error("Surface URL is empty.");
       }
 
-      let finalUrl = "";
+      setEndpointPort(portNumber);
+      setUseServerProxy(prefersServerProxy(port));
 
-      if (preset.kind === "web") {
-        const hostPort = endpointValue.split(":").pop();
-        finalUrl = `http://127.0.0.1:${hostPort}`;
-      } else {
-        finalUrl = buildSurfaceUrl(
-          endpointValue,
-          preset.kind,
-          preset.path
-        );
+      if (isOpenClawPort) {
+        await waitForOpenClawReady(settings, sandboxId, portNumber);
+        setOpenClawReady(true);
       }
 
-      setEndpointPort(port);
-      setUseServerProxy(preset.kind !== "web");
-
-      window.open(finalUrl, "_blank", "noopener,noreferrer");
-    } catch (err) {
-      setActionError(
-        err instanceof Error ? err.message : "Không mở được surface."
+      if (loadingWindow) {
+        loadingWindow.location.replace(finalUrl);
+      } else {
+        window.open(finalUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (nextError) {
+      const message =
+        nextError instanceof Error ? nextError.message : "Could not open the selected surface.";
+      updateLoadingWindow(
+        loadingWindow,
+        "OpenClaw is not ready",
+        `${message} Return to the sandbox page, wait for the gateway health to turn live, then try again.`,
       );
+      setActionError(message);
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handlePause() {
+    setBusyAction("pause");
+    setActionError("");
+    try {
+      await pause();
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : "Pause failed.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleResume() {
+    setBusyAction("resume");
+    setActionError("");
+    try {
+      await resume();
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : "Resume failed.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleDelete() {
+    setBusyAction("delete");
+    setActionError("");
+    try {
+      await remove();
+      navigate("/sandboxes");
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : "Delete failed.");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleRenew() {
+    if (!renewValue) return;
+
+    setBusyAction("renew");
+    setActionError("");
+    try {
+      await renewExpiration(new Date(renewValue).toISOString());
+    } catch (nextError) {
+      setActionError(nextError instanceof Error ? nextError.message : "Renew failed.");
     } finally {
       setBusyAction("");
     }
@@ -196,76 +430,31 @@ export function SandboxDetailsPage() {
 
   if (loading) return <LoadingBlock />;
   if (error || !sandbox) {
-    return <EmptyState title="Không tải được sandbox" description={error || "Sandbox không tồn tại."} />;
+    return <EmptyState title="Sandbox unavailable" description={error || "The sandbox could not be found."} />;
   }
-
-  const metadataEntries = Object.entries(sandbox.metadata || {});
 
   return (
     <div className="grid">
       <PageHeader
         eyebrow="Sandbox Workbench"
         title={`Sandbox ${sandbox.id}`}
-        subtitle="Lifecycle controls, endpoint routing, execd workbench và embedded surfaces cho agent workload này."
+        subtitle="Lifecycle controls, endpoint routing, execd workbench, and browser surfaces for this workload."
         actions={
           <>
-            <button className="button" onClick={refresh}>Làm mới</button>
-            <Link className="ghost-button" to="/sandboxes">Quay lại</Link>
+            <button className="button" onClick={refresh}>Refresh</button>
+            <Link className="ghost-button" to="/sandboxes">Back</Link>
             {sandbox.status.state === "Running" ? (
-              <button
-                className="ghost-button"
-                disabled={busyAction === "pause"}
-                onClick={async () => {
-                  setBusyAction("pause");
-                  setActionError("");
-                  try {
-                    await pause();
-                  } catch (nextError) {
-                    setActionError(nextError instanceof Error ? nextError.message : "Tạm dừng thất bại.");
-                  } finally {
-                    setBusyAction("");
-                  }
-                }}
-              >
-                Tạm dừng
+              <button className="ghost-button" disabled={busyAction === "pause"} onClick={() => void handlePause()}>
+                Pause
               </button>
             ) : null}
             {sandbox.status.state === "Paused" ? (
-              <button
-                className="ghost-button"
-                disabled={busyAction === "resume"}
-                onClick={async () => {
-                  setBusyAction("resume");
-                  setActionError("");
-                  try {
-                    await resume();
-                  } catch (nextError) {
-                    setActionError(nextError instanceof Error ? nextError.message : "Tiếp tục thất bại.");
-                  } finally {
-                    setBusyAction("");
-                  }
-                }}
-              >
-                Tiếp tục
+              <button className="ghost-button" disabled={busyAction === "resume"} onClick={() => void handleResume()}>
+                Resume
               </button>
             ) : null}
-            <button
-              className="ghost-button danger-button"
-              disabled={busyAction === "delete"}
-              onClick={async () => {
-                setBusyAction("delete");
-                setActionError("");
-                try {
-                  await remove();
-                  navigate("/sandboxes");
-                } catch (nextError) {
-                  setActionError(nextError instanceof Error ? nextError.message : "Xóa thất bại.");
-                } finally {
-                  setBusyAction("");
-                }
-              }}
-            >
-              Xóa
+            <button className="ghost-button danger-button" disabled={busyAction === "delete"} onClick={() => void handleDelete()}>
+              Delete
             </button>
           </>
         }
@@ -276,15 +465,15 @@ export function SandboxDetailsPage() {
 
       <section className="panel detail-grid">
         <div>
-          <div className="panel-header"><h3>Tổng quan</h3></div>
+          <div className="panel-header"><h3>Overview</h3></div>
           <div className="key-value-list">
-            <div><dt>Trạng thái</dt><dd><StatusBadge state={sandbox.status.state} /></dd></div>
+            <div><dt>Status</dt><dd><StatusBadge state={sandbox.status.state} /></dd></div>
             <div><dt>Template</dt><dd>{template.name}</dd></div>
-            <div><dt>Thông điệp</dt><dd>{sandbox.status.message || "-"}</dd></div>
+            <div><dt>Message</dt><dd>{sandbox.status.message || "-"}</dd></div>
             <div><dt>Image</dt><dd className="inline-code">{sandbox.image.uri}</dd></div>
             <div><dt>Entrypoint</dt><dd className="inline-code">{sandbox.entrypoint?.join(" ") || "-"}</dd></div>
-            <div><dt>Ngày tạo</dt><dd>{formatDate(sandbox.createdAt)} ({formatRelativeFromNow(sandbox.createdAt)})</dd></div>
-            <div><dt>Hết hạn</dt><dd>{formatDate(sandbox.expiresAt)}</dd></div>
+            <div><dt>Created</dt><dd>{formatDate(sandbox.createdAt)} ({formatRelativeFromNow(sandbox.createdAt)})</dd></div>
+            <div><dt>Expires</dt><dd>{formatDate(sandbox.expiresAt)}</dd></div>
             <div><dt>Reason</dt><dd>{sandbox.status.reason || "-"}</dd></div>
             <div><dt>Last transition</dt><dd>{formatDate(sandbox.status.lastTransitionAt)}</dd></div>
           </div>
@@ -292,14 +481,14 @@ export function SandboxDetailsPage() {
 
         <div className="stack">
           <div className="panel subtle-panel">
-            <div className="panel-header"><h3>Hướng dẫn theo template</h3></div>
+            <div className="panel-header"><h3>Template notes</h3></div>
             <div className="stack">
               <div className="helper-text">{template.description}</div>
               {template.recipe.map((line) => (
                 <div className="helper-text" key={line}>{line}</div>
               ))}
               {template.bootstrapCommand ? (
-                <div className="caption">Lệnh khởi tạo: {template.bootstrapCommand}</div>
+                <div className="caption">Bootstrap command: {template.bootstrapCommand}</div>
               ) : null}
             </div>
           </div>
@@ -308,22 +497,8 @@ export function SandboxDetailsPage() {
             <div className="panel-header"><h3>TTL</h3></div>
             <div className="page-actions">
               <input className="text-input" type="datetime-local" value={renewValue} onChange={(e) => setRenewValue(e.target.value)} />
-              <button
-                className="button"
-                disabled={!renewValue || busyAction === "renew"}
-                onClick={async () => {
-                  setBusyAction("renew");
-                  setActionError("");
-                  try {
-                    await renewExpiration(new Date(renewValue).toISOString());
-                  } catch (nextError) {
-                    setActionError(nextError instanceof Error ? nextError.message : "Gia hạn thất bại.");
-                  } finally {
-                    setBusyAction("");
-                  }
-                }}
-              >
-                Gia hạn
+              <button className="button" disabled={!renewValue || busyAction === "renew"} onClick={() => void handleRenew()}>
+                Renew
               </button>
             </div>
           </div>
@@ -332,127 +507,134 @@ export function SandboxDetailsPage() {
 
       {isDesktopTemplate ? (
         <section className="panel">
-          <div className="panel-header">
-            <h3>Desktop Actions</h3>
-          </div>
+          <div className="panel-header"><h3>Desktop actions</h3></div>
           <div className="page-actions">
-            <button
-              className="button"
-              disabled={busyAction === "open-6080"}
-              onClick={() => void openSurface("6080")}
-              type="button"
-            >
+            <button className="button" disabled={busyAction === "open-6080"} onClick={() => void openSurface("6080")} type="button">
               Open noVNC
             </button>
             <button
               className="ghost-button"
               disabled={!template.bootstrapCommand || busyAction === "bootstrap-desktop"}
-              onClick={() => template.bootstrapCommand && void runDesktopAction("bootstrap-desktop", template.bootstrapCommand, "Desktop bootstrap command đã được gửi qua execd.")}
+              onClick={() => template.bootstrapCommand && void runDesktopAction("bootstrap-desktop", template.bootstrapCommand, "Desktop bootstrap command was sent through execd.")}
               type="button"
             >
-              Bootstrap Desktop
+              Bootstrap
             </button>
             <button
               className="ghost-button"
               disabled={!template.restartCommand || busyAction === "restart-desktop"}
-              onClick={() => template.restartCommand && void runDesktopAction("restart-desktop", template.restartCommand, "Desktop stack đang được restart.")}
+              onClick={() => template.restartCommand && void runDesktopAction("restart-desktop", template.restartCommand, "Desktop stack restart was requested.")}
               type="button"
             >
-              Restart Desktop
+              Restart
             </button>
-            <button
-              className="ghost-button"
-              disabled={busyAction === "verify-execd"}
-              onClick={() => verifyExecd(endpoint?.endpoint)}
-              type="button"
-            >
+            <button className="ghost-button" disabled={busyAction === "verify-execd"} onClick={() => void verifyExecd(execdEndpoint)} type="button">
               Verify execd
             </button>
             {template.openBrowserCommand ? (
               <button
                 className="ghost-button"
                 disabled={busyAction === "open-browser"}
-                onClick={() => void runDesktopAction("open-browser", template.openBrowserCommand!, "Chromium launch command đã được gửi vào desktop sandbox.")}
+                onClick={() => void runDesktopAction("open-browser", template.openBrowserCommand!, "Browser launch command was sent to the desktop sandbox.")}
                 type="button"
               >
-                Open Browser
+                Open browser
               </button>
             ) : null}
-          </div>
-          <div className="helper-text">
-            Desktop dev sandboxes tự khởi động từ image entrypoint. Các nút này là đường phục hồi nhanh khi cần bật lại desktop stack hoặc mở browser bên trong sandbox.
           </div>
         </section>
       ) : null}
 
       <section className="panel">
-        <div className="panel-header">
-          <h3>Ports và Surfaces</h3>
-        </div>
+        <div className="panel-header"><h3>Ports and surfaces</h3></div>
         <div className="surface-grid">
           {template.ports.map((port) => (
             <article className="surface-card" key={port.port}>
               <div className="surface-chip">{port.kind}</div>
               <h4>{port.label}</h4>
-              <p>Port {port.port} bên trong sandbox</p>
+              <p>Port {port.port} inside the sandbox</p>
               <div className="surface-actions">
                 <button
                   className="button secondary"
                   type="button"
                   onClick={() => {
                     setEndpointPort(port.port);
-                    setUseServerProxy(prefersServerProxy(port.kind));
+                    setUseServerProxy(prefersServerProxy(port));
                   }}
                 >
                   Resolve
                 </button>
-                {["web", "novnc", "devtools"].includes(port.kind) ? (
-                  <button
-                    className="ghost-button"
-                    type="button"
-                    onClick={() => void openSurface(port.port)}
-                  >
+                {isSurfacePort(port) && (!isOpenClawTemplate || port.kind !== "web" || openClawReady) ? (
+                  <button className="ghost-button" type="button" onClick={() => void openSurface(port.port)}>
                     Open
                   </button>
                 ) : null}
               </div>
+              {isOpenClawTemplate && port.kind === "web" && !openClawReady ? (
+                <div className="helper-text">
+                  OpenClaw gateway is still starting. The Open button will appear after `/healthz` is live.
+                </div>
+              ) : null}
             </article>
           ))}
         </div>
 
         <div className="panel subtle-panel">
           <label>
-            Port hiện tại
+            Active port
             <input className="text-input" value={endpointPort} onChange={(e) => setEndpointPort(e.target.value)} />
           </label>
           <label className="checkbox-line">
             <input type="checkbox" checked={useServerProxy} onChange={(e) => setUseServerProxy(e.target.checked)} />
-            Dùng server proxy
+            Use server proxy
           </label>
           {endpoint ? (
             <div className="stack">
               <div><strong>Endpoint:</strong> <span className="inline-code">{endpoint.endpoint}</span></div>
-              <div className="helper-text">Headers: {endpoint.headers ? JSON.stringify(endpoint.headers) : "không có"}</div>
-              {surfaceUrl && activePortPreset?.kind !== "execd" ? (
+              <div className="helper-text">Headers: {endpoint.headers ? JSON.stringify(endpoint.headers) : "none"}</div>
+              {isOpenClawSurface ? (
+                <div className="helper-text">
+                  OpenClaw should use this direct endpoint so a local browser can follow the loopback control flow.
+                  The Open button is hidden until the gateway health is live, then it opens the direct endpoint.
+                </div>
+              ) : null}
+              {isOpenClawSurface ? (
+                <div className="helper-text">
+                  Gateway health: <strong>{openClawReady ? "live" : "starting"}</strong>
+                </div>
+              ) : null}
+              {activePortPreset.embeddable === false ? (
+                <div className="helper-text">
+                  This surface blocks iframe embedding with X-Frame-Options/CSP. Use the separate tab for the real session.
+                </div>
+              ) : null}
+              {isOpenClawSurface && !openClawReady ? (
+                <div className="helper-text">
+                  Embedded preview stays hidden until the OpenClaw gateway reports a healthy `/healthz`.
+                </div>
+              ) : null}
+              {surfaceUrl && activePortPreset.kind !== "execd" && (!isOpenClawSurface || openClawReady) ? (
                 <div className="page-actions">
                   <a className="button secondary" href={surfaceUrl} target="_blank" rel="noreferrer">
-                    Mở surface
+                    Open surface
                   </a>
                 </div>
               ) : null}
             </div>
           ) : (
-            <div className="helper-text">Chưa resolve được endpoint cho port này.</div>
+            <div className="helper-text">Resolve an endpoint for this port first.</div>
           )}
         </div>
       </section>
 
-      {surfaceUrl && activePortPreset && ["web", "novnc", "devtools"].includes(activePortPreset.kind) ? (
+      {showEmbeddedSurface ? (
         <section className="embedded-surface">
-          <h4>Embedded Surface</h4>
+          <h4>Embedded surface</h4>
           <p>
-            Đang render <strong>{activePortPreset.label}</strong> qua endpoint proxied. Nếu app bên trong chặn iframe,
-            bạn vẫn có thể mở nó trong tab mới.
+            Rendering <strong>{activePortPreset.label}</strong> with the browser-facing URL.
+            {activePortPreset.embeddable === false
+              ? " The app itself blocks iframe rendering, so this preview may show a blocked or broken frame."
+              : ""}
           </p>
           <iframe className="embedded-frame" src={surfaceUrl} title={activePortPreset.label} />
         </section>
@@ -461,7 +643,7 @@ export function SandboxDetailsPage() {
       <section className="panel">
         <div className="panel-header"><h3>Metadata</h3></div>
         {metadataEntries.length === 0 ? (
-          <div className="helper-text">Không có metadata.</div>
+          <div className="helper-text">No metadata.</div>
         ) : (
           <div className="table-wrap">
             <table className="data-table">
@@ -477,8 +659,8 @@ export function SandboxDetailsPage() {
       </section>
 
       <ExecutionPanel
-        endpoint={endpoint?.endpoint ?? ""}
-        endpointHeaders={endpoint?.headers ?? {}}
+        endpoint={execdEndpoint}
+        endpointHeaders={execdEndpointHeaders}
         bootstrapCommand={template.bootstrapCommand}
       />
     </div>

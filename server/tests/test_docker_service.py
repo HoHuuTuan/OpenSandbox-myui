@@ -115,6 +115,60 @@ def test_env_allows_empty_string_and_skips_none():
     assert all(not item.startswith("NONE=") for item in environment)
 
 
+@patch("opensandbox_server.services.docker.docker.from_env")
+def test_inject_openclaw_direct_allowed_origins_expands_exact_loopback_ports(mock_from_env):
+    mock_from_env.return_value = MagicMock()
+    service = DockerSandboxService(config=_app_config())
+
+    request = CreateSandboxRequest(
+        image=ImageSpec(uri="opensandbox/openclaw-broker:latest"),
+        timeout=120,
+        resourceLimits=ResourceLimits(root={}),
+        env={
+            "OPENCLAW_GATEWAY_ALLOWED_ORIGINS": "http://127.0.0.1:8090,http://localhost:8090",
+            "OPENCLAW_GATEWAY_TOKEN": "test-token",
+        },
+        metadata={"template": "openclaw-public-web"},
+        entrypoint=["/opt/opensandbox/openclaw-entrypoint.sh"],
+    )
+
+    updated = service._inject_openclaw_direct_allowed_origins(
+        request,
+        public_host="103.188.83.4",
+        http_host_port=32788,
+    )
+
+    allowed = set((updated.env or {})["OPENCLAW_GATEWAY_ALLOWED_ORIGINS"].split(","))
+    assert "http://127.0.0.1:8090" in allowed
+    assert "http://localhost:8090" in allowed
+    assert "http://127.0.0.1:32788" in allowed
+    assert "http://localhost:32788" in allowed
+    assert "http://103.188.83.4:32788" in allowed
+
+
+@patch("opensandbox_server.services.docker.docker.from_env")
+def test_inject_openclaw_direct_allowed_origins_ignores_non_openclaw_requests(mock_from_env):
+    mock_from_env.return_value = MagicMock()
+    service = DockerSandboxService(config=_app_config())
+
+    request = CreateSandboxRequest(
+        image=ImageSpec(uri="python:3.11"),
+        timeout=120,
+        resourceLimits=ResourceLimits(root={}),
+        env={"FOO": "bar"},
+        metadata={},
+        entrypoint=["python"],
+    )
+
+    updated = service._inject_openclaw_direct_allowed_origins(
+        request,
+        public_host="127.0.0.1",
+        http_host_port=32788,
+    )
+
+    assert updated == request
+
+
 @pytest.mark.asyncio
 @patch("opensandbox_server.services.docker.docker")
 async def test_create_sandbox_applies_security_defaults(mock_docker):

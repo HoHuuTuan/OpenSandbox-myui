@@ -37,13 +37,24 @@ docker build -t opensandbox/openclaw-broker:latest .
 | `OPENCLAW_MODEL_GATEWAY_URL` | empty | Internal OpenAI-compatible model gateway base URL, usually `http://model-gateway:3401/v1` |
 | `OPENCLAW_MODEL_GATEWAY_TOKEN` | empty | Bearer token sent to the internal model gateway |
 | `OPENCLAW_MODEL_PROVIDER_ID` | `internal-model` | Provider id injected into `openclaw.json` |
-| `OPENCLAW_MODEL_ID` | `mock-gpt-oss-mini` | Model id exposed by the internal model gateway |
-| `OPENCLAW_MODEL_NAME` | `Internal Mock GPT OSS Mini` | Human-readable model name |
+| `OPENCLAW_MODEL_ID` | `gemini-2.5-flash` | Model id exposed by the internal model gateway |
+| `OPENCLAW_MODEL_NAME` | `Gemini 2.5 Flash` | Human-readable model name |
 | `OPENCLAW_PRIMARY_MODEL` | empty | Optional direct model ref if you do not use `model-gateway` |
 | `OPENCLAW_DATA_BROKER_URL` | `http://data-broker:3302` | Internal Data Broker URL for the private-data boundary |
 | `OPENCLAW_DATA_BROKER_TOKEN` | empty | Bearer token used by `broker-query` |
 
 `OPENCLAW_GATEWAY_TOKEN` is now required explicitly so the image does not start with a shared demo secret. Override `OPENCLAW_GATEWAY_ALLOWED_ORIGINS` when exposing the gateway behind a different domain or reverse proxy.
+
+## Control UI connect flow
+
+For local OpenSandbox development, prefer the sandbox's direct gateway endpoint (for example `http://127.0.0.1:<random-port>`) instead of the lifecycle proxy path.
+
+- Direct local loopback browser access matches OpenClaw's native local Control UI flow.
+- Opening Control UI through `/v1/sandboxes/<id>/proxy/8080` can make OpenClaw treat the session as proxied/non-loopback and require pairing.
+- For OpenClaw sandboxes created through this repo's lifecycle server with `networkPolicy`, the server now auto-expands `gateway.controlUi.allowedOrigins` with the exact published direct origins (for example `http://localhost:<port>` and `http://127.0.0.1:<port>`), so the direct dashboard can connect without `origin not allowed`.
+- The admin UI in this repo should therefore resolve OpenClaw `web` surfaces directly and keep the lifecycle proxy for `execd`.
+
+OpenClaw still requires the correct `OPENCLAW_GATEWAY_TOKEN` in Control UI. Keep that token boundary-specific and do not reuse it across trust boundaries.
 
 ## Included helper
 

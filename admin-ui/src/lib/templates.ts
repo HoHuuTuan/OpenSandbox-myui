@@ -3,6 +3,7 @@ export type PortPreset = {
   label: string;
   kind: "execd" | "web" | "novnc" | "vnc" | "devtools";
   path?: string;
+  embeddable?: boolean;
 };
 
 export type SandboxTemplate = {
@@ -168,8 +169,8 @@ export const sandboxTemplates: SandboxTemplate[] = [
       "OPENCLAW_MODEL_GATEWAY_URL=http://model-gateway:3401/v1",
       "OPENCLAW_MODEL_GATEWAY_TOKEN=REPLACE_WITH_MODEL_GATEWAY_TOKEN",
       "OPENCLAW_MODEL_PROVIDER_ID=internal-model",
-      "OPENCLAW_MODEL_ID=mock-gpt-oss-mini",
-      "OPENCLAW_MODEL_NAME=Internal Mock GPT OSS Mini",
+      "OPENCLAW_MODEL_ID=gemini-2.5-flash",
+      "OPENCLAW_MODEL_NAME=Gemini 2.5 Flash",
     ].join("\n"),
     metadataText: "template=openclaw-public-web\nproject=agent-lab\ntrust-boundary=public-web",
     networkPolicyText: [
@@ -182,7 +183,7 @@ export const sandboxTemplates: SandboxTemplate[] = [
     ].join("\n"),
     ports: [
       { port: "44772", label: "execd", kind: "execd" },
-      { port: "8080", label: "Web UI", kind: "web" },
+      { port: "8080", label: "Web UI", kind: "web", embeddable: false },
     ],
     restartCommand:
       "sh -lc 'pkill -f \"openclaw.mjs gateway\" || true; /opt/opensandbox/openclaw-entrypoint.sh'",
@@ -191,6 +192,8 @@ export const sandboxTemplates: SandboxTemplate[] = [
     recipe: [
       "Boundary nay dung browser cho tac vu web/public, nhung khong duoc phep cham vao Data Broker hoac nguon du lieu noi bo.",
       "Model requests di qua model-gateway noi bo tren Docker network rieng, khong nhung credential upstream vao sandbox.",
+      "Admin UI nen resolve OpenClaw bang direct endpoint cua sandbox. Neu di qua lifecycle proxy, OpenClaw co the yeu cau pairing thay vi local-loopback connect.",
+      "OpenClaw Control UI tu chan iframe bang X-Frame-Options/CSP, vi vay khung embed co the hien blocked; dung tab rieng de connect that.",
       "Allowlist web o day chi la starter set. Neu agent can them domain public, bo sung vao network policy thay vi mo rong toan bo internet.",
       "Build image opensandbox/openclaw-broker:latest tu sandboxes/openclaw-broker truoc khi tao sandbox.",
       "Truoc khi tao sandbox, thay cac gia tri REPLACE_WITH_* bang secret rieng cua moi boundary hoac inject qua secret manager noi bo.",
@@ -215,8 +218,8 @@ export const sandboxTemplates: SandboxTemplate[] = [
       "OPENCLAW_MODEL_GATEWAY_URL=http://model-gateway:3401/v1",
       "OPENCLAW_MODEL_GATEWAY_TOKEN=REPLACE_WITH_MODEL_GATEWAY_TOKEN",
       "OPENCLAW_MODEL_PROVIDER_ID=internal-model",
-      "OPENCLAW_MODEL_ID=mock-gpt-oss-mini",
-      "OPENCLAW_MODEL_NAME=Internal Mock GPT OSS Mini",
+      "OPENCLAW_MODEL_ID=gemini-2.5-flash",
+      "OPENCLAW_MODEL_NAME=Gemini 2.5 Flash",
       "OPENCLAW_DATA_BROKER_URL=http://data-broker:3302",
       "OPENCLAW_DATA_BROKER_TOKEN=REPLACE_WITH_DATA_BROKER_TOKEN",
     ].join("\n"),
@@ -224,7 +227,7 @@ export const sandboxTemplates: SandboxTemplate[] = [
     networkPolicyText: ["default=deny", "allow=model-gateway", "allow=data-broker"].join("\n"),
     ports: [
       { port: "44772", label: "execd", kind: "execd" },
-      { port: "8080", label: "Web UI", kind: "web" },
+      { port: "8080", label: "Web UI", kind: "web", embeddable: false },
     ],
     bootstrapCommand: "broker-query schema",
     restartCommand:
@@ -235,6 +238,8 @@ export const sandboxTemplates: SandboxTemplate[] = [
       "Boundary nay chi thay model-gateway va Data Broker tren internal Docker network, khong nhin thay DB, raw source hay internet cong khai.",
       "Workspace duoc seed theo profile private-data de agent bat buoc dung broker-query thay vi bypass qua SQL hoac endpoint raw.",
       "Data Broker mang credential rieng de doc nguon phia sau va tra ve tap du lieu da loc, da format, da an thong tin nhay cam.",
+      "Admin UI nen resolve OpenClaw bang direct endpoint cua sandbox. Neu di qua lifecycle proxy, OpenClaw co the yeu cau pairing thay vi local-loopback connect.",
+      "OpenClaw Control UI tu chan iframe bang X-Frame-Options/CSP, vi vay khung embed co the hien blocked; dung tab rieng de connect that.",
       "Compose local cua repo nay da duoc refactor sang user-defined network + egress dns+nft de boundary nay chay dung end-to-end.",
       "Truoc khi tao sandbox, thay cac gia tri REPLACE_WITH_* bang secret rieng cua moi boundary hoac inject qua secret manager noi bo.",
     ],

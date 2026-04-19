@@ -45,8 +45,8 @@ DEFAULT_MODEL_GATEWAY_TOKEN = os.getenv(
     "model-gateway-local-token",
 )
 DEFAULT_MODEL_PROVIDER_ID = os.getenv("OPENCLAW_MODEL_PROVIDER_ID", "internal-model")
-DEFAULT_MODEL_ID = os.getenv("OPENCLAW_MODEL_ID", "mock-gpt-oss-mini")
-DEFAULT_MODEL_NAME = os.getenv("OPENCLAW_MODEL_NAME", "Internal Mock GPT OSS Mini")
+DEFAULT_MODEL_ID = os.getenv("OPENCLAW_MODEL_ID", "gemini-2.5-flash")
+DEFAULT_MODEL_NAME = os.getenv("OPENCLAW_MODEL_NAME", "Gemini 2.5 Flash")
 ROLE_ALLOWED_EGRESS = {
     "public-web": [
         "model-gateway",
@@ -168,6 +168,9 @@ def main() -> None:
     endpoint = sandbox.get_endpoint(gateway_port)
     print("OpenClaw is ready.")
     print(f"  Gateway endpoint: http://{endpoint.endpoint}")
+    print("  Connect flow: open the direct gateway endpoint above in your browser.")
+    print("  Auth flow: paste OPENCLAW_GATEWAY_TOKEN into the Control UI when prompted.")
+    print("  Avoid using /v1/sandboxes/<id>/proxy/8080 for OpenClaw Control UI unless you intend to pair that browser.")
     print(f"  Sandbox trust boundary: {role}")
     if role == "private-data":
         print("  Sandbox data access mode: broker-only")

@@ -66,9 +66,20 @@ Creating OpenClaw sandbox with image=opensandbox/openclaw-broker:latest on http:
 [check] sandbox ready after 7.1s
 OpenClaw is ready.
   Gateway endpoint: http://127.0.0.1:56123
+  Connect flow: open the direct gateway endpoint above in your browser.
+  Auth flow: paste OPENCLAW_GATEWAY_TOKEN into the Control UI when prompted.
+  Avoid using /v1/sandboxes/<id>/proxy/8080 for OpenClaw Control UI unless you intend to pair that browser.
   Sandbox trust boundary: private-data
   Sandbox data access mode: broker-only
 ```
+
+To connect successfully in local development:
+
+1. Open the printed `Gateway endpoint` directly, for example `http://127.0.0.1:56123`.
+2. Paste the same `OPENCLAW_GATEWAY_TOKEN` that you injected into the sandbox.
+3. Do not use the lifecycle proxy URL for Control UI if your goal is a local loopback connection without pairing.
+
+When the sandbox is created through this repo's lifecycle server with `networkPolicy`, the server also auto-adds the exact direct dashboard origins (such as `http://localhost:<port>` and `http://127.0.0.1:<port>`) into `gateway.controlUi.allowedOrigins`, so the direct dashboard should not fail with `origin not allowed`.
 
 ## Default configuration
 
@@ -84,7 +95,7 @@ OpenClaw is ready.
 | `OPENCLAW_MODEL_GATEWAY_URL` | `http://model-gateway:3401/v1` | Internal model gateway |
 | `OPENCLAW_MODEL_GATEWAY_TOKEN` | `model-gateway-local-token` | Bearer token used by the sandbox |
 | `OPENCLAW_MODEL_PROVIDER_ID` | `internal-model` | Provider id injected into OpenClaw config |
-| `OPENCLAW_MODEL_ID` | `mock-gpt-oss-mini` | Model id exposed by the internal model gateway |
+| `OPENCLAW_MODEL_ID` | `gemini-2.5-flash` | Model id exposed by the internal model gateway |
 | `OPENCLAW_DATA_BROKER_URL` | `http://data-broker:3302` | Broker URL for the private-data boundary |
 | `OPENCLAW_DATA_BROKER_TOKEN` | `broker-local-token` | Bearer token used by `broker-query` |
 | `OPENCLAW_ALLOWED_EGRESS` | role-specific allowlist | Optional override for additional allowed hosts |

@@ -16,6 +16,50 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function sameHeaders(
+  left?: Record<string, string>,
+  right?: Record<string, string>,
+) {
+  const leftEntries = Object.entries(left ?? {}).sort();
+  const rightEntries = Object.entries(right ?? {}).sort();
+  if (leftEntries.length !== rightEntries.length) return false;
+
+  return leftEntries.every(([key, value], index) => {
+    const [otherKey, otherValue] = rightEntries[index] ?? [];
+    return key === otherKey && value === otherValue;
+  });
+}
+
+function sameEndpoint(left: EndpointResponse | null, right: EndpointResponse | null) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.endpoint === right.endpoint && sameHeaders(left.headers, right.headers);
+}
+
+function sameSandbox(left: Sandbox | null, right: Sandbox | null) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+
+  return (
+    left.id === right.id &&
+    left.image.uri === right.image.uri &&
+    left.createdAt === right.createdAt &&
+    left.expiresAt === right.expiresAt &&
+    left.status.state === right.status.state &&
+    left.status.reason === right.status.reason &&
+    left.status.message === right.status.message &&
+    left.status.lastTransitionAt === right.status.lastTransitionAt &&
+    JSON.stringify(left.metadata ?? {}) === JSON.stringify(right.metadata ?? {}) &&
+    JSON.stringify(left.entrypoint ?? []) === JSON.stringify(right.entrypoint ?? [])
+  );
+}
+
+function sameSandboxList(left: Sandbox[], right: Sandbox[]) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => sameSandbox(item, right[index] ?? null));
+}
+
 export function useSandboxCollection(filters: { state: string; metadata: string; pageSize: number }) {
   const { settings } = useSettings();
   const [items, setItems] = useState<Sandbox[]>([]);
@@ -36,33 +80,20 @@ export function useSandboxCollection(filters: { state: string; metadata: string;
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
-      setLoading(true);
+    async function load(showLoading = false) {
+      if (showLoading) {
+        setLoading(true);
+      }
       setError("");
 
       try {
-        const response = await fetchSandboxes(settings, requestParams);
-        console.log("[fetchSandboxes response]", response);
-
-        let nextItems: Sandbox[] = [];
-
-        if (Array.isArray(response)) {
-          nextItems = response;
-        } else if (Array.isArray((response as any)?.items)) {
-          nextItems = (response as any).items;
-        } else if (Array.isArray((response as any)?.sandboxes)) {
-          nextItems = (response as any).sandboxes;
-        } else {
-          nextItems = [];
-        }
-
+        const nextItems = await fetchSandboxes(settings, requestParams);
         if (!cancelled) {
-          setItems(nextItems);
+          setItems((current) => (sameSandboxList(current, nextItems) ? current : nextItems));
         }
       } catch (error) {
-        console.error("[useSandboxCollection load error]", error);
         if (!cancelled) {
-          setError(errorMessage(error, "Không thể tải danh sách sandbox."));
+          setError(errorMessage(error, "Could not load sandboxes."));
           setItems([]);
         }
       } finally {
@@ -70,12 +101,11 @@ export function useSandboxCollection(filters: { state: string; metadata: string;
       }
     }
 
-    load();
+    void load(true);
 
-    const timer = window.setInterval(
-      load,
-      Math.max(settings.autoRefreshSeconds, 3) * 1000
-    );
+    const timer = window.setInterval(() => {
+      void load(false);
+    }, Math.max(settings.autoRefreshSeconds, 3) * 1000);
 
     return () => {
       cancelled = true;
@@ -112,12 +142,17 @@ export function useSandboxDetails(sandboxId: string, endpointPort: string, useSe
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      setLoading(true);
+
+    async function load(showLoading = false) {
+      if (showLoading) {
+        setLoading(true);
+      }
       setError("");
+
       try {
         const sandboxData = await fetchSandbox(settings, sandboxId);
         let endpointData: EndpointResponse | null = null;
+
         if (endpointPort.trim()) {
           try {
             endpointData = await fetchSandboxEndpoint(settings, sandboxId, endpointPort.trim(), useServerProxy);
@@ -125,21 +160,27 @@ export function useSandboxDetails(sandboxId: string, endpointPort: string, useSe
             endpointData = null;
           }
         }
+
         if (!cancelled) {
-          setSandbox(sandboxData);
-          setEndpoint(endpointData);
+          setSandbox((current) => (sameSandbox(current, sandboxData) ? current : sandboxData));
+          setEndpoint((current) => (sameEndpoint(current, endpointData) ? current : endpointData));
         }
       } catch (error) {
         if (!cancelled) {
-          setError(errorMessage(error, "Không thể tải chi tiết sandbox."));
+          setError(errorMessage(error, "Could not load sandbox details."));
           setSandbox(null);
+          setEndpoint(null);
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
-    load();
-    const timer = window.setInterval(load, Math.max(settings.autoRefreshSeconds, 3) * 1000);
+
+    void load(true);
+    const timer = window.setInterval(() => {
+      void load(false);
+    }, Math.max(settings.autoRefreshSeconds, 3) * 1000);
+
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -193,10 +234,10 @@ export function useSandboxDiagnostics(sandboxId: string) {
 
       try {
         const nextData: Diagnostics = {
-          summary: `Sandbox ID: ${sandboxId}\nChưa kết nối API chẩn đoán.`,
-          logs: "Chưa có endpoint logs.",
-          inspect: "Chưa có endpoint inspect.",
-          events: "Chưa có endpoint events.",
+          summary: `Sandbox ID: ${sandboxId}\nDiagnostic APIs are not wired yet.`,
+          logs: "Logs endpoint is not configured yet.",
+          inspect: "Inspect endpoint is not configured yet.",
+          events: "Events endpoint is not configured yet.",
         };
 
         if (!cancelled) {
@@ -204,7 +245,7 @@ export function useSandboxDiagnostics(sandboxId: string) {
         }
       } catch (error) {
         if (!cancelled) {
-          setError(errorMessage(error, "Không thể tải chẩn đoán sandbox."));
+          setError(errorMessage(error, "Could not load sandbox diagnostics."));
           setDiagnostics(null);
         }
       } finally {
@@ -212,7 +253,7 @@ export function useSandboxDiagnostics(sandboxId: string) {
       }
     }
 
-    load();
+    void load();
 
     return () => {
       cancelled = true;

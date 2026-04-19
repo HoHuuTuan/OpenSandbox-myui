@@ -15,9 +15,12 @@ COPY --chown=node:node scripts/broker-query /usr/local/bin/broker-query
 COPY --chown=node:node scripts/openclaw-entrypoint.sh /opt/opensandbox/openclaw-entrypoint.sh
 COPY --chown=node:node profiles/ /opt/opensandbox/profiles/
 
-RUN chmod 755 /usr/local/bin/broker-query /opt/opensandbox/openclaw-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/broker-query /opt/opensandbox/openclaw-entrypoint.sh \
+    && chmod 755 /usr/local/bin/broker-query /opt/opensandbox/openclaw-entrypoint.sh
 
 USER node
 
 WORKDIR /workspace
+HEALTHCHECK --interval=180s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8080/healthz > /dev/null || exit 1
 ENTRYPOINT ["/opt/opensandbox/openclaw-entrypoint.sh"]
