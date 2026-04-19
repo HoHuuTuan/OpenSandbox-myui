@@ -1,132 +1,145 @@
-# OpenClaw Gateway Example
+# OpenClaw Dual-Boundary Example
 
-Launch an [OpenClaw](https://github.com/openclaw/openclaw) Gateway inside an OpenSandbox instance and expose its HTTP endpoint. The script polls the gateway until it returns HTTP 200, then prints the reachable endpoint.
+This example launches an [OpenClaw](https://github.com/openclaw/openclaw) gateway inside OpenSandbox with two clean trust boundaries:
 
-## Quick Start
+- `public-web`: web/public research only
+- `private-data`: internal reporting data only through `data-broker`
+
+The standard data path is:
+
+`OpenClaw private-data sandbox -> Data Broker -> private source`
+
+The standard model path is:
+
+`OpenClaw sandbox -> model-gateway -> upstream model provider`
+
+No OpenClaw sandbox receives raw database credentials or talks to a raw source directly.
+
+## Local end-to-end flow
+
+### 1. Build the OpenClaw image
 
 ```shell
-# Install dependencies
-uv pip install opensandbox requests
-
-# Run with default settings
-uv run python examples/openclaw/main.py
+docker build -t opensandbox/openclaw-broker:latest sandboxes/openclaw-broker
 ```
 
-## Configuration Options
+### 2. Start OpenSandbox and internal services
 
-The example supports various environment variables for customization:
+```shell
+cd server
+docker compose up --build
+```
+
+This compose stack starts:
+
+- `opensandbox-server` on `http://localhost:8090`
+- `model-gateway` on the internal Docker network
+- `mock-model-provider` on the internal Docker network
+- `data-broker` on the internal Docker network
+- `mock-source` on the internal Docker network
+
+### 3. Install Python dependencies
+
+```shell
+uv pip install opensandbox requests
+```
+
+### 4. Launch the desired trust boundary
+
+Private-data boundary:
+
+```shell
+OPENCLAW_ROLE=private-data uv run python examples/openclaw/main.py
+```
+
+Public-web boundary:
+
+```shell
+OPENCLAW_ROLE=public-web uv run python examples/openclaw/main.py
+```
+
+Expected output:
+
+```text
+Creating OpenClaw sandbox with image=opensandbox/openclaw-broker:latest on http://localhost:8090...
+  Trust boundary: private-data
+[check] sandbox ready after 7.1s
+OpenClaw is ready.
+  Gateway endpoint: http://127.0.0.1:56123
+  Connect flow: open the direct gateway endpoint above in your browser.
+  Auth flow: paste OPENCLAW_GATEWAY_TOKEN into the Control UI when prompted.
+  Avoid using /v1/sandboxes/<id>/proxy/8080 for OpenClaw Control UI unless you intend to pair that browser.
+  Sandbox trust boundary: private-data
+  Sandbox data access mode: broker-only
+```
+
+To connect successfully in local development:
+
+1. Open the printed `Gateway endpoint` directly, for example `http://127.0.0.1:56123`.
+2. Paste the same `OPENCLAW_GATEWAY_TOKEN` that you injected into the sandbox.
+3. Do not use the lifecycle proxy URL for Control UI if your goal is a local loopback connection without pairing.
+
+When the sandbox is created through this repo's lifecycle server with `networkPolicy`, the server also auto-adds the exact direct dashboard origins (such as `http://localhost:<port>` and `http://127.0.0.1:<port>`) into `gateway.controlUi.allowedOrigins`, so the direct dashboard should not fail with `origin not allowed`.
+
+## Default configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENCLAW_SERVER` | `http://localhost:8080` | OpenSandbox server address |
-| `OPENCLAW_TOKEN` | `dummy-token-for-sandbox` | Gateway authentication token |
-| `OPENCLAW_IMAGE` | `ghcr.io/openclaw/openclaw:latest` | Container image |
+| `OPENCLAW_SERVER` | `http://localhost:8090` | OpenSandbox server URL for this repo's compose stack |
+| `OPENCLAW_IMAGE` | `opensandbox/openclaw-broker:latest` | Trust-boundary sandbox image |
+| `OPENCLAW_ROLE` | `private-data` | Boundary profile: `public-web` or `private-data` |
 | `OPENCLAW_TIMEOUT` | `3600` | Sandbox timeout in seconds |
+| `OPENCLAW_TOKEN` | `dummy-token-for-sandbox` | Default gateway token fallback |
+| `OPENCLAW_GATEWAY_TOKEN` | `dummy-token-for-sandbox` | Gateway token passed into the sandbox |
+| `OPENCLAW_PORT` | `8080` | OpenClaw gateway port inside the sandbox |
+| `OPENCLAW_MODEL_GATEWAY_URL` | `http://model-gateway:3401/v1` | Internal model gateway |
+| `OPENCLAW_MODEL_GATEWAY_TOKEN` | `model-gateway-local-token` | Bearer token used by the sandbox |
+| `OPENCLAW_MODEL_PROVIDER_ID` | `internal-model` | Provider id injected into OpenClaw config |
+| `OPENCLAW_MODEL_ID` | `gemini-2.5-flash` | Model id exposed by the internal model gateway |
+| `OPENCLAW_DATA_BROKER_URL` | `http://data-broker:3302` | Broker URL for the private-data boundary |
+| `OPENCLAW_DATA_BROKER_TOKEN` | `broker-local-token` | Bearer token used by `broker-query` |
+| `OPENCLAW_ALLOWED_EGRESS` | role-specific allowlist | Optional override for additional allowed hosts |
 
-## Network Policy
+## Role-specific egress defaults
 
-By default, the sandbox denies all network access except `pypi.org` (for package installation). You can customize this in `main.py`:
+`public-web`:
 
-```python
-network_policy=NetworkPolicy(
-    defaultAction="deny",
-    egress=[
-        NetworkRule(action="allow", target="pypi.org"),
-        NetworkRule(action="allow", target="pypi.python.org"),
-        # Add more allowed targets
-    ],
-)
-```
+- `model-gateway`
+- `github.com`
+- `api.github.com`
+- `developer.mozilla.org`
+- `docs.python.org`
 
-## Environment Variables for OpenClaw
+`private-data`:
 
-Pass environment variables to the OpenClaw Gateway inside the sandbox:
+- `model-gateway`
+- `data-broker`
 
-```python
-env={
-    "OPENCLAW_GATEWAY_TOKEN": token,
-    "OPENCLAW_MODEL": "claude-sonnet-4-20250514",
-    # Add more env vars as needed
-},
-```
-
-## Start OpenSandbox server [local]
-
-You can find the latest OpenClaw container image [here](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
-
-### Notes (Docker runtime requirement)
-
-The server uses `runtime.type = "docker"` by default, so it **must** be able to reach a running Docker daemon.
-
-- **Docker Desktop**: ensure Docker Desktop is running, then verify with `docker version`.
-- **Colima (macOS)**: start it first (`colima start`) and export the socket before starting the server:
+Override the allowlist with:
 
 ```shell
-export DOCKER_HOST="unix://${HOME}/.colima/default/docker.sock"
+export OPENCLAW_ALLOWED_EGRESS="model-gateway,data-broker"
 ```
 
-Pre-pull the OpenClaw image:
+## Broker contract
+
+The private-data profile seeds `/workspace/AGENTS.md` and `/workspace/TOOLS.md` so the OpenClaw agent is instructed to:
+
+- run `broker-query schema` first
+- call broker routes instead of raw source systems
+- stop and report missing fields instead of bypassing the broker
+
+Supported helper commands inside the private-data sandbox:
 
 ```shell
-docker pull ghcr.io/openclaw/openclaw:latest
-```
-
-Start the OpenSandbox server (logs will stay in the terminal):
-
-```shell
-uv pip install opensandbox-server
-opensandbox-server init-config ~/.sandbox.toml --example docker
-opensandbox-server
-```
-
-If you see errors like `FileNotFoundError: [Errno 2] No such file or directory` from `docker/transport/unixconn.py`, it usually means the Docker unix socket is missing or Docker is not running.
-
-## Create and Access the OpenClaw Sandbox
-
-This example is hard-coded for a quick start:
-- OpenSandbox server: `http://localhost:8080`
-- Image: `ghcr.io/openclaw/openclaw:latest`
-- Gateway port: `18789`
-- Timeout: `3600s`
-- Token: `OPENCLAW_GATEWAY_TOKEN` (default: `dummy-token-for-sandbox`)
-
-Install dependencies from the project root:
-
-```shell
-uv pip install opensandbox requests
-```
-
-Run the example (set a real token if you need authenticated access):
-
-```shell
-export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
-uv run python examples/openclaw/main.py
-```
-
-You should see output similar to:
-
-```text
-Creating openclaw sandbox with image=ghcr.io/openclaw/openclaw:latest on OpenSandbox server http://localhost:8080...
-[check] sandbox ready after 7.1s
-Openclaw started finished. Please refer to 127.0.0.1:56123
-```
-
-The endpoint printed at the end (e.g., `127.0.0.1:56123`) is the OpenClaw Gateway address exposed from the sandbox.
-
-## Advanced: Custom Gateway Port
-
-To use a custom port, modify the `entrypoint` in `main.py`:
-
-```python
-entrypoint=["node dist/index.js gateway --bind=lan --port 19999 --allow-unconfigured --verbose"],
-```
-
-Then update the port in the `get_endpoint()` call:
-
-```python
-endpoint = sandbox.get_endpoint(19999)
+broker-query schema
+broker-query customer-profile cust_acme_001
+broker-query customer-orders cust_acme_001 5
+broker-query account-summary acct_apac_001
 ```
 
 ## References
+
 - [OpenClaw](https://github.com/openclaw/openclaw)
 - [OpenSandbox Python SDK](https://pypi.org/project/opensandbox/)
+- [Trust-boundary sandbox image](../../sandboxes/openclaw-broker/README.md)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { parseKeyValueText } from "../lib/format";
+import { parseKeyValueText, parseNetworkPolicyText } from "../lib/format";
 import { getTemplateById, sandboxTemplates } from "../lib/templates";
 import type { CreateSandboxRequest } from "../types";
 
@@ -12,6 +12,7 @@ type FormState = {
   memory: string;
   envText: string;
   metadataText: string;
+  networkPolicyText: string;
 };
 
 function parseCommandLine(value: string) {
@@ -46,6 +47,7 @@ function buildFormFromTemplate(templateId: string): FormState {
     memory: template.memory,
     envText: template.envText,
     metadataText: template.metadataText,
+    networkPolicyText: template.networkPolicyText ?? "",
   };
 }
 
@@ -94,6 +96,10 @@ export function CreateSandboxForm({
             template: form.templateId,
           },
         };
+        const networkPolicy = parseNetworkPolicyText(form.networkPolicyText);
+        if (networkPolicy) {
+          payload.networkPolicy = networkPolicy;
+        }
         if (entrypoint.length > 0) {
           payload.entrypoint = entrypoint;
         }
@@ -101,7 +107,7 @@ export function CreateSandboxForm({
       }}
     >
       <div className="panel-header">
-        <h3>Template Agent</h3>
+        <h3>Agent Templates</h3>
       </div>
 
       <div className="template-grid">
@@ -111,6 +117,7 @@ export function CreateSandboxForm({
             key={template.id}
             onClick={() => applyTemplate(template.id)}
             type="button"
+            aria-pressed={form.templateId === template.id}
           >
             <div className="template-chip">{template.category}</div>
             <h4>{template.name}</h4>
@@ -122,7 +129,7 @@ export function CreateSandboxForm({
 
       <div className="panel subtle-panel">
         <div className="panel-header">
-          <h3>Template Đã Chọn</h3>
+          <h3>Selected Template</h3>
         </div>
         <div className="stack">
           <div className="helper-text">{selectedTemplate.description}</div>
@@ -134,65 +141,108 @@ export function CreateSandboxForm({
             ))}
           </div>
           {selectedTemplate.bootstrapCommand ? (
-            <div className="caption">Lệnh khởi tạo: {selectedTemplate.bootstrapCommand}</div>
+            <div className="caption">Bootstrap command: {selectedTemplate.bootstrapCommand}</div>
           ) : null}
           <div className="stack">
             {selectedTemplate.recipe.map((line) => (
-              <div className="helper-text" key={line}>{line}</div>
+              <div className="helper-text" key={line}>
+                {line}
+              </div>
             ))}
           </div>
         </div>
       </div>
 
       <div className="panel-header">
-        <h3>Cấu Hình Sandbox</h3>
+        <h3>Sandbox Config</h3>
       </div>
 
       <label>
-        Mã template
-        <input className="text-input" value={form.templateId} onChange={(e) => update("templateId", e.target.value)} />
+        Template id
+        <input
+          className="text-input"
+          value={form.templateId}
+          onChange={(event) => update("templateId", event.target.value)}
+        />
       </label>
 
       <label>
         Image URI
-        <input className="text-input" value={form.imageUri} onChange={(e) => update("imageUri", e.target.value)} />
+        <input
+          className="text-input"
+          value={form.imageUri}
+          onChange={(event) => update("imageUri", event.target.value)}
+        />
       </label>
 
       <div className="two-column">
         <label>
-          Timeout (giây)
-          <input className="text-input" value={form.timeout} onChange={(e) => update("timeout", e.target.value)} />
+          Timeout (seconds)
+          <input
+            className="text-input"
+            value={form.timeout}
+            onChange={(event) => update("timeout", event.target.value)}
+          />
         </label>
         <label>
           Entrypoint
-          <input className="text-input" value={form.entrypoint} onChange={(e) => update("entrypoint", e.target.value)} />
+          <input
+            className="text-input"
+            value={form.entrypoint}
+            onChange={(event) => update("entrypoint", event.target.value)}
+          />
         </label>
       </div>
 
       <div className="two-column">
         <label>
           CPU limit
-          <input className="text-input" value={form.cpu} onChange={(e) => update("cpu", e.target.value)} />
+          <input
+            className="text-input"
+            value={form.cpu}
+            onChange={(event) => update("cpu", event.target.value)}
+          />
         </label>
         <label>
           Memory limit
-          <input className="text-input" value={form.memory} onChange={(e) => update("memory", e.target.value)} />
+          <input
+            className="text-input"
+            value={form.memory}
+            onChange={(event) => update("memory", event.target.value)}
+          />
         </label>
       </div>
 
       <label>
-        Biến môi trường, mỗi dòng một `KEY=VALUE`
-        <textarea className="text-area" value={form.envText} onChange={(e) => update("envText", e.target.value)} />
+        Environment variables, one `KEY=VALUE` per line
+        <textarea
+          className="text-area"
+          value={form.envText}
+          onChange={(event) => update("envText", event.target.value)}
+        />
       </label>
 
       <label>
-        Metadata, mỗi dòng một `KEY=VALUE`
-        <textarea className="text-area" value={form.metadataText} onChange={(e) => update("metadataText", e.target.value)} />
+        Metadata, one `KEY=VALUE` per line
+        <textarea
+          className="text-area"
+          value={form.metadataText}
+          onChange={(event) => update("metadataText", event.target.value)}
+        />
+      </label>
+
+      <label>
+        Network policy, one `default=deny|allow` or `allow=target` / `deny=target` per line
+        <textarea
+          className="text-area"
+          value={form.networkPolicyText}
+          onChange={(event) => update("networkPolicyText", event.target.value)}
+        />
       </label>
 
       <div>
         <button className="button" type="submit" disabled={busy}>
-          {busy ? "Đang tạo..." : "Tạo sandbox workbench"}
+          {busy ? "Creating..." : "Create sandbox workbench"}
         </button>
       </div>
     </form>

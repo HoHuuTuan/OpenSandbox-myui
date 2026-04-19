@@ -1,8 +1,11 @@
 services:
   opensandbox-server:
-    image: opensandbox/server:latest
+    build:
+      context: .
+    image: opensandbox/server:local
     container_name: opensandbox-server
-    network_mode: bridge
+    networks:
+      - opensandbox-net
     ports:
       - "8090:8090"
     volumes:
@@ -17,8 +20,10 @@ services:
     container_name: sdk-client
     command: >
       sh -c "pip install opensandbox && tail -f /dev/null"
+    networks:
+      - opensandbox-net
     environment:
-      - OPENSANDBOX_SERVER_URL=http://host.docker.internal:8090
+      - OPENSANDBOX_SERVER_URL=http://opensandbox-server:8090
 
   ai-server:
     build:
@@ -30,6 +35,68 @@ services:
       - "3001:3001"
     env_file:
       - ./ai-server/.env
+    restart: unless-stopped
+
+  mock-source:
+    build:
+      context: ./mock-source
+    container_name: mock-source
+    networks:
+      - opensandbox-net
+    expose:
+      - "3301"
+    environment:
+      - MOCK_SOURCE_PORT=3301
+      - MOCK_SOURCE_API_KEY=${MOCK_SOURCE_API_KEY:?Set MOCK_SOURCE_API_KEY in server/.env}
+    restart: unless-stopped
+
+  data-broker:
+    build:
+      context: ./data-broker
+    container_name: data-broker
+    depends_on:
+      - mock-source
+    networks:
+      - opensandbox-net
+    expose:
+      - "3302"
+    environment:
+      - DATA_BROKER_PORT=3302
+      - DATA_BROKER_TOKEN=${DATA_BROKER_TOKEN:?Set DATA_BROKER_TOKEN in server/.env}
+      - DATA_BROKER_SOURCE_BASE_URL=http://mock-source:3301
+      - DATA_BROKER_SOURCE_TOKEN=${MOCK_SOURCE_API_KEY:?Set MOCK_SOURCE_API_KEY in server/.env}
+    restart: unless-stopped
+
+  mock-model-provider:
+    build:
+      context: ./mock-model-provider
+    container_name: mock-model-provider
+    networks:
+      - opensandbox-net
+    expose:
+      - "3501"
+    environment:
+      - MOCK_MODEL_PROVIDER_PORT=3501
+      - MOCK_MODEL_PROVIDER_API_KEY=${MODEL_GATEWAY_UPSTREAM_API_KEY:?Set MODEL_GATEWAY_UPSTREAM_API_KEY in server/.env}
+      - MOCK_MODEL_PROVIDER_MODELS=${MODEL_GATEWAY_ALLOWED_MODELS:-gemini-2.5-flash}
+    restart: unless-stopped
+
+  model-gateway:
+    build:
+      context: ./model-gateway
+    container_name: model-gateway
+    depends_on:
+      - mock-model-provider
+    networks:
+      - opensandbox-net
+    expose:
+      - "3401"
+    environment:
+      - MODEL_GATEWAY_PORT=3401
+      - MODEL_GATEWAY_TOKEN=${MODEL_GATEWAY_TOKEN:?Set MODEL_GATEWAY_TOKEN in server/.env}
+      - MODEL_GATEWAY_UPSTREAM_BASE_URL=${MODEL_GATEWAY_UPSTREAM_BASE_URL:-http://mock-model-provider:3501}
+      - MODEL_GATEWAY_UPSTREAM_API_KEY=${MODEL_GATEWAY_UPSTREAM_API_KEY:?Set MODEL_GATEWAY_UPSTREAM_API_KEY in server/.env}
+      - MODEL_GATEWAY_ALLOWED_MODELS=${MODEL_GATEWAY_ALLOWED_MODELS:-gemini-2.5-flash}
     restart: unless-stopped
 
 configs:
@@ -46,9 +113,10 @@ configs:
 
       [egress]
       image = "opensandbox/egress:v1.0.4"
+      mode = "dns+nft"
 
       [docker]
-      network_mode = "bridge"
+      network_mode = "opensandbox-net"
       host_ip = "host.docker.internal"
       drop_capabilities = ["AUDIT_WRITE", "MKNOD", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
       no_new_privileges = false
@@ -59,4 +127,5 @@ configs:
 
 networks:
   opensandbox-net:
+    name: opensandbox-net
     driver: bridge

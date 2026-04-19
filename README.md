@@ -173,7 +173,7 @@ OpenSandbox provides examples covering SDK usage, agent integrations, browser au
 - **[langgraph](examples/langgraph/README.md)** - LangGraph state-machine workflow that creates/runs a sandbox job with fallback retry.
 - **[google-adk](examples/google-adk/README.md)** - Google ADK agent using OpenSandbox tools to write/read files and run commands.
 - **[nullclaw](examples/nullclaw/README.md)** - Launch a [Nullclaw](https://github.com/nullclaw/nullclaw) Gateway inside a sandbox.
-- **[openclaw](examples/openclaw/README.md)** - Launch an OpenClaw Gateway inside a sandbox.
+- **[openclaw](examples/openclaw/README.md)** - Launch an OpenClaw gateway inside a sandbox with broker-only data access.
 
 #### 🌐 Browser and Desktop Environments
 

@@ -49,6 +49,7 @@ from opensandbox_server.api.schema import (
     Host,
     ImageSpec,
     NetworkPolicy,
+    NetworkRule,
     ListSandboxesRequest,
     OSSFS,
     PVC,
@@ -112,6 +113,60 @@ def test_env_allows_empty_string_and_skips_none():
     assert "EMPTY=" in environment  # empty string preserved
     # None should be skipped
     assert all(not item.startswith("NONE=") for item in environment)
+
+
+@patch("opensandbox_server.services.docker.docker.from_env")
+def test_inject_openclaw_direct_allowed_origins_expands_exact_loopback_ports(mock_from_env):
+    mock_from_env.return_value = MagicMock()
+    service = DockerSandboxService(config=_app_config())
+
+    request = CreateSandboxRequest(
+        image=ImageSpec(uri="opensandbox/openclaw-broker:latest"),
+        timeout=120,
+        resourceLimits=ResourceLimits(root={}),
+        env={
+            "OPENCLAW_GATEWAY_ALLOWED_ORIGINS": "http://127.0.0.1:8090,http://localhost:8090",
+            "OPENCLAW_GATEWAY_TOKEN": "test-token",
+        },
+        metadata={"template": "openclaw-public-web"},
+        entrypoint=["/opt/opensandbox/openclaw-entrypoint.sh"],
+    )
+
+    updated = service._inject_openclaw_direct_allowed_origins(
+        request,
+        public_host="103.188.83.4",
+        http_host_port=32788,
+    )
+
+    allowed = set((updated.env or {})["OPENCLAW_GATEWAY_ALLOWED_ORIGINS"].split(","))
+    assert "http://127.0.0.1:8090" in allowed
+    assert "http://localhost:8090" in allowed
+    assert "http://127.0.0.1:32788" in allowed
+    assert "http://localhost:32788" in allowed
+    assert "http://103.188.83.4:32788" in allowed
+
+
+@patch("opensandbox_server.services.docker.docker.from_env")
+def test_inject_openclaw_direct_allowed_origins_ignores_non_openclaw_requests(mock_from_env):
+    mock_from_env.return_value = MagicMock()
+    service = DockerSandboxService(config=_app_config())
+
+    request = CreateSandboxRequest(
+        image=ImageSpec(uri="python:3.11"),
+        timeout=120,
+        resourceLimits=ResourceLimits(root={}),
+        env={"FOO": "bar"},
+        metadata={},
+        entrypoint=["python"],
+    )
+
+    updated = service._inject_openclaw_direct_allowed_origins(
+        request,
+        public_host="127.0.0.1",
+        http_host_port=32788,
+    )
+
+    assert updated == request
 
 
 @pytest.mark.asyncio
@@ -394,7 +449,6 @@ async def test_egress_sidecar_injection_and_capabilities(mock_docker):
 
     with (
         patch("opensandbox_server.services.docker.generate_egress_token", return_value="egress-token"),
-        patch.object(service, "_allocate_distinct_host_ports", return_value=(44772, 8080)),
         patch.object(service, "_ensure_image_available"),
         patch.object(service, "_prepare_sandbox_runtime"),
     ):
@@ -408,18 +462,15 @@ async def test_egress_sidecar_injection_and_capabilities(mock_docker):
 
     # Sidecar host config should have NET_ADMIN and port bindings
     assert "NET_ADMIN" in sidecar_kwargs["host_config"]["cap_add"]
-    assert "44772" in sidecar_kwargs["host_config"]["port_bindings"]
-    assert "8080" in sidecar_kwargs["host_config"]["port_bindings"]
+    assert sidecar_kwargs["host_config"]["port_bindings"]["44772"] == ("0.0.0.0", 0)
+    assert sidecar_kwargs["host_config"]["port_bindings"]["8080"] == ("0.0.0.0", 0)
 
     # Main container should share sidecar netns, drop NET_ADMIN, and have no port bindings
     assert main_kwargs["host_config"]["network_mode"] == "container:sidecar-id"
     assert "NET_ADMIN" in set(main_kwargs["host_config"].get("cap_drop") or [])
     assert "port_bindings" not in main_kwargs["host_config"]
 
-    # Main container labels should carry host port info
     labels = main_kwargs["labels"]
-    assert labels.get("opensandbox.io/embedding-proxy-port")
-    assert labels.get("opensandbox.io/http-port")
     assert labels[SANDBOX_EGRESS_AUTH_TOKEN_METADATA_KEY] == "egress-token"
 
     sidecar_env = sidecar_kwargs["environment"]
@@ -434,10 +485,30 @@ async def test_egress_sidecar_injection_and_capabilities(mock_docker):
 
 @pytest.mark.asyncio
 @patch("opensandbox_server.services.docker.docker")
-async def test_network_policy_rejected_on_user_defined_network(mock_docker):
-    """networkPolicy must be rejected when network_mode is a user-defined named network."""
+async def test_network_policy_supported_on_user_defined_network(mock_docker):
+    """networkPolicy should keep the sidecar on the configured named network."""
+
+    def host_cfg_side_effect(**kwargs):
+        return kwargs
+
     mock_client = MagicMock()
     mock_client.containers.list.return_value = []
+    mock_network = MagicMock()
+    mock_network.attrs = {
+        "Containers": {
+            "broker": {"Name": "data-broker", "IPv4Address": "172.19.0.8/16"},
+            "model": {"Name": "model-gateway", "IPv4Address": "172.19.0.7/16"},
+        }
+    }
+    mock_client.networks.get.return_value = mock_network
+    mock_client.api.create_host_config.side_effect = host_cfg_side_effect
+    mock_client.api.create_endpoint_config.side_effect = lambda **kwargs: kwargs
+    mock_client.api.create_networking_config.side_effect = lambda cfg: cfg
+    mock_client.api.create_container.side_effect = [
+        {"Id": "sidecar-id"},
+        {"Id": "main-id"},
+    ]
+    mock_client.containers.get.side_effect = [MagicMock(id="sidecar-id"), MagicMock(id="main-id")]
     mock_docker.from_env.return_value = mock_client
 
     cfg = _app_config()
@@ -445,22 +516,46 @@ async def test_network_policy_rejected_on_user_defined_network(mock_docker):
     cfg.egress = EgressConfig(image="egress:latest")
     service = DockerSandboxService(config=cfg)
 
-    request = CreateSandboxRequest(
+    req = CreateSandboxRequest(
         image=ImageSpec(uri="python:3.11"),
         timeout=120,
         resourceLimits=ResourceLimits(root={}),
-        env={},
+        env={
+            "OPENCLAW_MODEL_GATEWAY_URL": "http://model-gateway:3401/v1",
+            "OPENCLAW_DATA_BROKER_URL": "http://data-broker:3302",
+        },
         metadata={},
         entrypoint=["python"],
-        networkPolicy=NetworkPolicy(default_action="deny", egress=[]),
+        networkPolicy=NetworkPolicy(
+            default_action="deny",
+            egress=[
+                NetworkRule(action="allow", target="model-gateway"),
+                NetworkRule(action="allow", target="data-broker"),
+            ],
+        ),
     )
 
-    with pytest.raises(HTTPException) as exc:
-        await service.create_sandbox(request)
+    with (
+        patch("opensandbox_server.services.docker.generate_egress_token", return_value="egress-token"),
+        patch.object(service, "_ensure_image_available"),
+        patch.object(service, "_prepare_sandbox_runtime"),
+    ):
+        await service.create_sandbox(req)
 
-    assert exc.value.status_code == status.HTTP_400_BAD_REQUEST
-    assert exc.value.detail["code"] == SandboxErrorCodes.INVALID_PARAMETER
-    assert "my-custom-net" in exc.value.detail["message"]
+    assert len(mock_client.api.create_container.call_args_list) == 2
+    sidecar_kwargs = mock_client.api.create_container.call_args_list[0].kwargs
+    main_kwargs = mock_client.api.create_container.call_args_list[1].kwargs
+
+    assert "network_mode" not in sidecar_kwargs["host_config"]
+    assert "my-custom-net" in sidecar_kwargs["networking_config"]
+    assert main_kwargs["host_config"]["network_mode"] == "container:sidecar-id"
+    assert sidecar_kwargs["host_config"]["port_bindings"]["44772"] == ("0.0.0.0", 0)
+    assert sidecar_kwargs["host_config"]["port_bindings"]["8080"] == ("0.0.0.0", 0)
+    serialized_sidecar_env = " ".join(sidecar_kwargs["environment"])
+    assert "172.19.0.8" in serialized_sidecar_env
+    assert "172.19.0.7" in serialized_sidecar_env
+    assert "OPENCLAW_MODEL_GATEWAY_URL=http://172.19.0.7:3401/v1" in main_kwargs["environment"]
+    assert "OPENCLAW_DATA_BROKER_URL=http://172.19.0.8:3302" in main_kwargs["environment"]
 
 
 @pytest.mark.asyncio
@@ -508,6 +603,8 @@ async def test_create_sandbox_user_defined_network_uses_correct_network_mode(moc
     mock_client.containers.list.return_value = []
     mock_client.networks.get.return_value = MagicMock()  # network exists
     mock_client.api.create_host_config.side_effect = host_cfg_side_effect
+    mock_client.api.create_endpoint_config.side_effect = lambda **kwargs: kwargs
+    mock_client.api.create_networking_config.side_effect = lambda cfg: cfg
     mock_client.api.create_container.return_value = {"Id": "main-id"}
     mock_client.containers.get.return_value = MagicMock(id="main-id")
     mock_docker.from_env.return_value = mock_client
@@ -533,7 +630,8 @@ async def test_create_sandbox_user_defined_network_uses_correct_network_mode(moc
         await service.create_sandbox(request)
 
     call_kwargs = mock_client.api.create_container.call_args.kwargs
-    assert call_kwargs["host_config"]["network_mode"] == "my-app-net"
+    assert "network_mode" not in call_kwargs["host_config"]
+    assert "my-app-net" in call_kwargs["networking_config"]
 
 
 @patch("opensandbox_server.services.docker.docker")
@@ -582,8 +680,6 @@ def test_egress_sidecar_cleanup_uses_api_remove_when_lookup_fails(mock_docker):
                 "sandbox-id",
                 NetworkPolicy(defaultAction="deny", egress=[]),
                 egress_token="egress-token",
-                host_execd_port=44772,
-                host_http_port=8080,
             )
 
     detail = exc.value.detail
@@ -623,8 +719,6 @@ def test_egress_sidecar_missing_id_preserves_specific_error(mock_docker):
                 "sandbox-id",
                 NetworkPolicy(defaultAction="deny", egress=[]),
                 egress_token="egress-token",
-                host_execd_port=44772,
-                host_http_port=8080,
             )
 
     detail = exc.value.detail
@@ -666,8 +760,6 @@ def test_egress_sidecar_cleanup_wraps_unexpected_lookup_error(mock_docker):
                 "sandbox-id",
                 NetworkPolicy(defaultAction="deny", egress=[]),
                 egress_token="egress-token",
-                host_execd_port=44772,
-                host_http_port=8080,
             )
 
     detail = exc.value.detail

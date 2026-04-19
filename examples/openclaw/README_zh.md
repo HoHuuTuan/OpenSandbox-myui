@@ -1,72 +1,103 @@
-# OpenClaw Gateway 示例
+# OpenClaw 双边界示例
 
-在 OpenSandbox 沙箱实例中启动 [OpenClaw](https://github.com/openclaw/openclaw) Gateway，并暴露 HTTP 访问端点。脚本会轮询 Gateway，直到返回 HTTP 200，然后打印可访问地址。
+这个示例把 [OpenClaw](https://github.com/openclaw/openclaw) 运行在 OpenSandbox 中，并拆成两个明确的 trust boundary：
 
-## 启动 OpenSandbox Server（本地）
+- `public-web`：只做公网 / Web 任务
+- `private-data`：只通过 `data-broker` 访问内部报表数据
 
-最新 OpenClaw 镜像可在这里查看：[OpenClaw Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw)。
+标准数据链路：
 
-### 注意事项（Docker 运行时要求）
+`OpenClaw private-data sandbox -> Data Broker -> private source`
 
-默认情况下，OpenSandbox Server 使用 `runtime.type = "docker"`，因此 **必须** 能访问可用的 Docker daemon。
+标准模型链路：
 
-- **Docker Desktop**：确保已启动，然后执行 `docker version` 验证。
-- **Colima（macOS）**：先启动 (`colima start`)，再在启动 server 前导出 socket：
+`OpenClaw sandbox -> model-gateway -> upstream model provider`
 
-```shell
-export DOCKER_HOST="unix://${HOME}/.colima/default/docker.sock"
-```
+任何 OpenClaw sandbox 都不会直接拿到数据库凭证，也不会直连原始数据源。
 
-预拉取 OpenClaw 镜像：
+## 本地端到端运行
 
-```shell
-docker pull ghcr.io/openclaw/openclaw:latest
-```
-
-启动 OpenSandbox Server（日志会持续输出在当前终端）：
+### 1. 构建 OpenClaw 镜像
 
 ```shell
-uv pip install opensandbox-server
-opensandbox-server init-config ~/.sandbox.toml --example docker
-opensandbox-server
+docker build -t opensandbox/openclaw-broker:latest sandboxes/openclaw-broker
 ```
 
-如果出现 `docker/transport/unixconn.py` 的 `FileNotFoundError: [Errno 2] No such file or directory`，通常表示 Docker unix socket 不存在或 Docker 未启动。
+### 2. 启动 OpenSandbox 和内部服务
 
-## 创建并访问 OpenClaw Sandbox
+```shell
+cd server
+docker compose up --build
+```
 
-该示例为快速体验预置了以下参数：
+这套 compose 会启动：
 
-- OpenSandbox Server：`http://localhost:8080`
-- 镜像：`ghcr.io/openclaw/openclaw:latest`
-- Gateway 端口：`18789`
-- 超时时间：`3600s`
-- Token：`OPENCLAW_GATEWAY_TOKEN`（默认：`dummy-token-for-sandbox`）
+- `opensandbox-server`：`http://localhost:8090`
+- `model-gateway`：仅内部 Docker 网络可见
+- `mock-model-provider`：仅内部 Docker 网络可见
+- `data-broker`：仅内部 Docker 网络可见
+- `mock-source`：仅内部 Docker 网络可见
 
-在项目根目录安装依赖：
+### 3. 安装 Python 依赖
 
 ```shell
 uv pip install opensandbox requests
 ```
 
-运行示例（如需鉴权访问请设置真实 token）：
+### 4. 按 boundary 启动示例
+
+private-data：
 
 ```shell
-export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
-uv run python examples/openclaw/main.py
+OPENCLAW_ROLE=private-data uv run python examples/openclaw/main.py
 ```
 
-预期输出类似：
+public-web：
 
-```text
-Creating openclaw sandbox with image=ghcr.io/openclaw/openclaw:latest on OpenSandbox server http://localhost:8080...
-[check] sandbox ready after 7.1s
-Openclaw started finished. Please refer to 127.0.0.1:56123
+```shell
+OPENCLAW_ROLE=public-web uv run python examples/openclaw/main.py
 ```
 
-最后打印的地址（如 `127.0.0.1:56123`）就是沙箱中 OpenClaw Gateway 的可访问端点。
+## 默认配置
 
-## 参考
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OPENCLAW_SERVER` | `http://localhost:8090` | 本仓库 compose 启动的 OpenSandbox 地址 |
+| `OPENCLAW_IMAGE` | `opensandbox/openclaw-broker:latest` | trust-boundary 沙箱镜像 |
+| `OPENCLAW_ROLE` | `private-data` | boundary 角色：`public-web` 或 `private-data` |
+| `OPENCLAW_MODEL_GATEWAY_URL` | `http://model-gateway:3401/v1` | 内部模型网关 |
+| `OPENCLAW_MODEL_GATEWAY_TOKEN` | `model-gateway-local-token` | 沙箱访问模型网关的 Bearer token |
+| `OPENCLAW_DATA_BROKER_URL` | `http://data-broker:3302` | private-data boundary 使用的 broker 地址 |
+| `OPENCLAW_DATA_BROKER_TOKEN` | `broker-local-token` | `broker-query` 使用的 Bearer token |
 
-- [OpenClaw](https://github.com/openclaw/openclaw)
-- [OpenSandbox Python SDK](https://pypi.org/project/opensandbox/)
+## Boundary 默认出站策略
+
+`public-web`：
+
+- `model-gateway`
+- `github.com`
+- `api.github.com`
+- `developer.mozilla.org`
+- `docs.python.org`
+
+`private-data`：
+
+- `model-gateway`
+- `data-broker`
+
+## Broker 约束
+
+private-data profile 会预置 `/workspace/AGENTS.md` 和 `/workspace/TOOLS.md`，明确要求 OpenClaw agent：
+
+- 先执行 `broker-query schema`
+- 通过 broker 路由获取客户 / 账户 / 订单数据
+- 如果字段缺失，就报告 contract gap，而不是绕过 broker
+
+可用 helper：
+
+```shell
+broker-query schema
+broker-query customer-profile cust_acme_001
+broker-query customer-orders cust_acme_001 5
+broker-query account-summary acct_apac_001
+```

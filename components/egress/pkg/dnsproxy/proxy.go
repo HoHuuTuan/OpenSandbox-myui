@@ -396,7 +396,11 @@ func normalizeEnvUpstreamAddr(s string) (string, error) {
 }
 
 func discoverUpstreamsFromResolv() ([]string, error) {
-	cfg, err := dns.ClientConfigFromFile("/etc/resolv.conf")
+	return discoverUpstreamsFromResolvFile("/etc/resolv.conf")
+}
+
+func discoverUpstreamsFromResolvFile(resolvPath string) ([]string, error) {
+	cfg, err := dns.ClientConfigFromFile(resolvPath)
 	if err != nil || len(cfg.Servers) == 0 {
 		if err != nil {
 			log.Warnf("[dns] fallback upstream resolver due to error: %v", err)
@@ -416,6 +420,12 @@ func discoverUpstreamsFromResolv() ([]string, error) {
 		}
 		nonLoop = append(nonLoop, addr)
 	}
+	if len(nonLoop) == 0 && len(loop) > 0 {
+		if dockerUpstreams, err := parseDockerExtServerUpstreams(resolvPath, port); err == nil && len(dockerUpstreams) > 0 {
+			log.Infof("[dns] using Docker ext servers from %s: %v", resolvPath, dockerUpstreams)
+			return dedupeUpstreamAddrs(dockerUpstreams), nil
+		}
+	}
 	out := append(nonLoop, loop...)
 	if len(out) == 0 {
 		out = []string{net.JoinHostPort(cfg.Servers[0], port)}
@@ -423,6 +433,43 @@ func discoverUpstreamsFromResolv() ([]string, error) {
 	if len(out) > constants.ResolvNameserverCap {
 		out = out[:constants.ResolvNameserverCap]
 	}
+	return dedupeUpstreamAddrs(out), nil
+}
+
+func parseDockerExtServerUpstreams(resolvPath string, port string) ([]string, error) {
+	raw, err := os.ReadFile(resolvPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "# ExtServers:") {
+			continue
+		}
+		start := strings.Index(line, "[")
+		end := strings.LastIndex(line, "]")
+		if start < 0 || end <= start {
+			continue
+		}
+
+		for _, part := range strings.Split(line[start+1:end], ",") {
+			candidate := strings.TrimSpace(part)
+			if candidate == "" {
+				continue
+			}
+			if open := strings.Index(candidate, "("); open >= 0 && strings.HasSuffix(candidate, ")") {
+				candidate = candidate[open+1 : len(candidate)-1]
+			}
+			ip := net.ParseIP(candidate)
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			out = append(out, net.JoinHostPort(ip.String(), port))
+		}
+	}
+
 	return dedupeUpstreamAddrs(out), nil
 }
 
